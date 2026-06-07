@@ -19,6 +19,11 @@ const mongoUri = process.env.MONGODB_URI || "";
 const mongoDbName = process.env.MONGODB_DB || "skillarion_meet";
 const adminEmail = (process.env.ADMIN_EMAIL || "admin@SkillArionDevelopment.in").toLowerCase();
 const adminPassword = process.env.ADMIN_PASSWORD || "SkillArionAdmin123";
+const whatsappGraphVersion = process.env.WHATSAPP_GRAPH_VERSION || "v20.0";
+const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+const whatsappAccessToken = process.env.WHATSAPP_ACCESS_TOKEN || "";
+const whatsappTemplateName = process.env.WHATSAPP_TEMPLATE_NAME || "";
+const whatsappTemplateLanguage = process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en_US";
 const collectionNames = ["meetings", "guests", "candidates", "whatsappCampaigns", "attendance", "transcripts"];
 let mongoClient = null;
 let mongoDb = null;
@@ -314,6 +319,11 @@ async function handleApi(request, response, requestedUrl) {
     return;
   }
 
+  if (method === "GET" && pathname === "/api/whatsapp/status") {
+    sendJson(response, 200, getWhatsappStatus());
+    return;
+  }
+
   if (method === "POST" && pathname === "/api/whatsapp-campaigns") {
     const body = await readJsonBody(request);
     const recipients = normalizeWhatsappRecipients(body.recipients);
@@ -331,9 +341,28 @@ async function handleApi(request, response, requestedUrl) {
       recipients,
       sendMode: body.sendMode === "Scheduled" ? "Scheduled" : "Immediate",
       scheduledAt: body.sendMode === "Scheduled" ? String(body.scheduledAt || "") : "",
-      status: body.sendMode === "Scheduled" ? "Scheduled locally" : "Saved locally",
+      status: body.sendMode === "Scheduled" ? "Scheduled locally" : "Ready for WhatsApp API",
       createdAt: body.createdAt || new Date().toLocaleString(),
+      deliveryResults: [],
     };
+
+    if (campaign.sendMode === "Immediate") {
+      const whatsappStatus = getWhatsappStatus();
+      if (whatsappStatus.configured) {
+        const delivery = await sendWhatsappCampaign(campaign);
+        campaign.deliveryResults = delivery.results;
+        campaign.status = delivery.status;
+      } else {
+        campaign.status = "Ready for WhatsApp API";
+        campaign.deliveryResults = recipients.map(person => ({
+          name: person.name,
+          phone: person.phone,
+          status: "Not sent",
+          detail: "WhatsApp API credentials are not configured on the server.",
+        }));
+      }
+    }
+
     db.whatsappCampaigns = db.whatsappCampaigns || [];
     db.whatsappCampaigns.unshift(campaign);
     await writeDb(db);
@@ -636,6 +665,103 @@ function normalizeWhatsappRecipients(value) {
     }
   });
   return Array.from(byPhone.values());
+}
+
+function getWhatsappStatus() {
+  const configured = Boolean(whatsappPhoneNumberId && whatsappAccessToken && whatsappTemplateName);
+  return {
+    configured,
+    status: configured ? "Configured" : "Not configured",
+    graphVersion: whatsappGraphVersion,
+    phoneNumberId: whatsappPhoneNumberId ? maskValue(whatsappPhoneNumberId) : "",
+    templateName: whatsappTemplateName,
+    templateLanguage: whatsappTemplateLanguage,
+    requirement: configured
+      ? "Immediate campaigns can be sent through WhatsApp Cloud API."
+      : "Add WhatsApp Cloud API credentials in .env to send real messages.",
+  };
+}
+
+function maskValue(value) {
+  const text = String(value || "");
+  if (text.length <= 4) {
+    return text ? "****" : "";
+  }
+  return `${"*".repeat(Math.max(0, text.length - 4))}${text.slice(-4)}`;
+}
+
+async function sendWhatsappCampaign(campaign) {
+  const results = [];
+  for (const recipient of campaign.recipients) {
+    const result = await sendWhatsappTemplateMessage(recipient, campaign.message);
+    results.push(result);
+  }
+
+  const sentCount = results.filter(result => result.status === "Sent").length;
+  if (sentCount === results.length) {
+    return { status: "Sent via WhatsApp API", results };
+  }
+  if (sentCount > 0) {
+    return { status: "Partially sent via WhatsApp API", results };
+  }
+  return { status: "WhatsApp API failed", results };
+}
+
+async function sendWhatsappTemplateMessage(recipient, message) {
+  const endpoint = `https://graph.facebook.com/${whatsappGraphVersion}/${whatsappPhoneNumberId}/messages`;
+  const payload = {
+    messaging_product: "whatsapp",
+    to: recipient.phone,
+    type: "template",
+    template: {
+      name: whatsappTemplateName,
+      language: { code: whatsappTemplateLanguage },
+      components: [
+        {
+          type: "body",
+          parameters: [
+            {
+              type: "text",
+              text: message,
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  try {
+    const apiResponse = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${whatsappAccessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await apiResponse.json().catch(() => ({}));
+    if (!apiResponse.ok) {
+      return {
+        name: recipient.name,
+        phone: recipient.phone,
+        status: "Failed",
+        detail: data.error?.message || `WhatsApp API returned ${apiResponse.status}`,
+      };
+    }
+    return {
+      name: recipient.name,
+      phone: recipient.phone,
+      status: "Sent",
+      messageId: data.messages?.[0]?.id || "",
+    };
+  } catch (error) {
+    return {
+      name: recipient.name,
+      phone: recipient.phone,
+      status: "Failed",
+      detail: error.message,
+    };
+  }
 }
 
 function normalizePhone(phone) {

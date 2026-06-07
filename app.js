@@ -842,11 +842,11 @@ function renderWhatsApp() {
         <div>
           <div class="login-kicker">Candidate communication</div>
           <h1>Send WhatsApp updates to shortlisted candidates.</h1>
-          <p>Upload a CSV or paste candidate names and phone numbers, then save an immediate or scheduled message campaign.</p>
+          <p>Upload a CSV or paste candidate names and phone numbers, then send immediate campaigns when WhatsApp API is configured.</p>
         </div>
         <div class="actions">
           <span class="pill ok">Candidates only</span>
-          <span class="pill">API pending</span>
+          <span class="pill">${state.settings.whatsappApiStatus || "API pending"}</span>
         </div>
       </section>
       <div class="grid cols-2">
@@ -889,10 +889,10 @@ function renderWhatsApp() {
         <section class="panel">
           <div class="panel-header">
             <h2>Message details</h2>
-            <span class="pill warn">Not sent yet</span>
+            <span class="pill warn">Template required</span>
           </div>
           <div class="notice">
-            This page saves WhatsApp campaigns only. Candidates will receive messages after the real WhatsApp Business API is connected.
+            Immediate messages will be sent through WhatsApp Cloud API after Meta credentials and an approved template are added in the backend .env file. Until then, campaigns are saved as ready for API.
           </div>
           <div class="field">
             <label>Message</label>
@@ -914,7 +914,7 @@ function renderWhatsApp() {
           <div class="actions" style="margin-top: 14px;">
             <button class="btn primary" id="saveWhatsappCampaignBtn">Save campaign</button>
           </div>
-          <div class="muted" style="margin-top: 12px;">Real WhatsApp sending will be connected after the company provides WhatsApp Business API credentials.</div>
+          <div class="muted" style="margin-top: 12px;">Use a Meta template with one body variable. The typed message is sent as that variable.</div>
         </section>
       </div>
       <section class="panel">
@@ -929,8 +929,9 @@ function renderWhatsApp() {
                 <strong>${campaign.sendMode}${campaign.scheduledAt ? ` | ${campaign.scheduledAt}` : ""}</strong>
                 <div class="muted">${campaign.recipients.length} candidates | ${campaign.status} | ${campaign.createdAt}</div>
                 <div class="campaign-message">${campaign.message}</div>
+                ${renderWhatsappDeliveryResults(campaign)}
               </div>
-              <span class="pill ${campaign.sendMode === "Scheduled" ? "" : "ok"}">${campaign.sendMode === "Scheduled" ? "Scheduled" : "Ready"}</span>
+              <span class="pill ${campaign.status && campaign.status.includes("Sent") ? "ok" : ""}">${campaign.sendMode === "Scheduled" ? "Scheduled" : "API"}</span>
             </div>
           `).join("") || `<div class="card">No WhatsApp campaigns saved yet.</div>`}
         </div>
@@ -1152,6 +1153,12 @@ async function loadBootstrapData() {
     transcriptLines = data.transcripts || transcriptLines;
     whatsappCampaigns = data.whatsappCampaigns || whatsappCampaigns;
     state.settings = { ...state.settings, ...(data.settings || {}) };
+    try {
+      const whatsappStatus = await apiRequest("/api/whatsapp/status");
+      state.settings.whatsappApiStatus = whatsappStatus.status || state.settings.whatsappApiStatus;
+    } catch (error) {
+      state.settings.whatsappApiStatus = state.settings.whatsappApiStatus || "Not configured";
+    }
     state.backendOnline = true;
   } catch (error) {
     state.backendOnline = false;
@@ -1872,6 +1879,20 @@ function renderWhatsappPreviewMarkup() {
   `;
 }
 
+function renderWhatsappDeliveryResults(campaign) {
+  if (!Array.isArray(campaign.deliveryResults) || !campaign.deliveryResults.length) {
+    return "";
+  }
+  const sent = campaign.deliveryResults.filter(result => result.status === "Sent").length;
+  const failed = campaign.deliveryResults.filter(result => result.status === "Failed").length;
+  const pending = campaign.deliveryResults.length - sent - failed;
+  return `
+    <div class="muted" style="margin-top: 8px;">
+      Delivery: ${sent} sent${failed ? `, ${failed} failed` : ""}${pending ? `, ${pending} pending` : ""}
+    </div>
+  `;
+}
+
 function parseWhatsappRecipients(value) {
   const lines = String(value || "")
     .split(/\r?\n/)
@@ -1946,9 +1967,11 @@ async function saveWhatsappCampaign() {
     });
     whatsappCampaigns.unshift(saved);
     state.backendOnline = true;
+    campaign.status = saved.status || campaign.status;
   } catch (error) {
     whatsappCampaigns.unshift({ ...campaign, id: `WA-${Date.now()}` });
     state.backendOnline = false;
+    campaign.status = "Saved locally because backend did not respond";
   }
 
   whatsappDraftRecipients = [];
@@ -1956,7 +1979,7 @@ async function saveWhatsappCampaign() {
   state.whatsappDraftMessage = "";
   state.whatsappDraftScheduledAt = "";
   state.whatsappSendMode = "Immediate";
-  alert(sendMode === "Scheduled" ? "WhatsApp campaign scheduled locally." : "WhatsApp campaign saved locally.");
+  alert(sendMode === "Scheduled" ? "WhatsApp campaign scheduled locally." : campaign.status);
   render();
 }
 
