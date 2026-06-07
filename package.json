@@ -1,0 +1,12 @@
+{
+  "name": "skill-arion-meet",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "migrate:mongo": "node migrate-json-to-mongodb.js"
+  },
+  "dependencies": {
+    "mongodb": "^6.17.0"
+  }
+}

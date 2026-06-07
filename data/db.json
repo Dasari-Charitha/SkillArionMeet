@@ -1,0 +1,20 @@
+{
+  "settings": {
+    "companyDomain": "SkillArionDevelopment.in",
+    "meetingTimeLimit": "No fixed time limit",
+    "capacityLimit": 1000,
+    "guestAccess": "Invite link",
+    "transcriptMode": "Manual start",
+    "candidateTranscriptAccess": true,
+    "exportFormat": "CSV",
+    "databaseMode": "Local JSON database",
+    "deploymentTarget": "Not deployed",
+    "whatsappApiStatus": "Not configured"
+  },
+  "meetings": [],
+  "guests": [],
+  "candidates": [],
+  "whatsappCampaigns": [],
+  "attendance": [],
+  "transcripts": []
+}
