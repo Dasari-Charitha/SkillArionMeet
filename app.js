@@ -449,13 +449,14 @@ function renderMeeting() {
           `).join("")}
         </div>
         <div class="controls">
-          <button class="control ${state.micOn ? "active" : ""}" id="micBtn" title="${state.micOn ? "Microphone on" : "Microphone off"}" aria-label="${state.micOn ? "Microphone on" : "Microphone off"}">${state.micOn ? "&#127908;" : "&#128263;"}</button>
-          <button class="control ${state.cameraOn ? "active" : ""}" id="cameraBtn" title="Camera" aria-label="Camera">&#128249;</button>
-          <button class="control" id="screenBtn" title="Screen share" aria-label="Screen share">&#128421;</button>
+          <button class="control ${state.micOn ? "active" : ""}" id="micBtn" title="${state.micOn ? "Microphone on" : "Microphone off"}" aria-label="${state.micOn ? "Microphone on" : "Microphone off"}">${controlIcon(state.micOn ? "mic" : "micOff")}</button>
+          <button class="control ${state.cameraOn ? "active" : ""}" id="cameraBtn" title="Camera" aria-label="Camera">${controlIcon("camera")}</button>
+          <button class="control" id="screenBtn" title="Screen share" aria-label="Screen share">${controlIcon("screen")}</button>
           ${canTrackAttendance ? `<button class="control track-control ${state.meetingPanel === "attendance" ? "active" : ""}" id="markAttendanceBtn" title="Track attendance">Track attendance</button>` : ""}
-          <button class="control ${state.meetingPanel === "chat" ? "active" : ""}" id="chatBtn" title="Chat" aria-label="Chat">&#128172;</button>
-          <button class="control ${state.meetingPanel === "participants" ? "active" : ""}" id="peopleBtn" title="Participants" aria-label="Participants">&#128101;</button>
-          <button class="control end" id="endBtn" title="End meeting" aria-label="End meeting">&#128222;</button>
+          <button class="control ${state.meetingPanel === "chat" ? "active" : ""}" id="chatBtn" title="Chat" aria-label="Chat">${controlIcon("chat")}</button>
+          <button class="control ${state.meetingPanel === "participants" ? "active" : ""}" id="peopleBtn" title="Participants" aria-label="Participants">${controlIcon("people")}</button>
+          <button class="control" id="moreBtn" title="More options" aria-label="More options">${controlIcon("more")}</button>
+          <button class="control end" id="endBtn" title="End meeting" aria-label="End meeting">${controlIcon("phone")}</button>
         </div>
       </section>
       ${state.meetingPanel ? `<aside class="side-stack">
@@ -463,6 +464,20 @@ function renderMeeting() {
       </aside>` : ""}
     </div>
   `;
+}
+
+function controlIcon(name) {
+  const icons = {
+    mic: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/><path d="M8 21h8"/></svg>`,
+    micOff: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9v2a3 3 0 0 0 5 2.24"/><path d="M15 9V6a3 3 0 0 0-5.12-2.12"/><path d="M19 11a7 7 0 0 1-1.7 4.58"/><path d="M5 11a7 7 0 0 0 10.12 6.25"/><path d="M12 18v3"/><path d="M8 21h8"/><path d="M3 3l18 18"/></svg>`,
+    camera: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z"/><path d="M17 10l5-3v10l-5-3Z"/></svg>`,
+    screen: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M12 16v3"/><path d="M8 19h8"/><path d="M12 13V9"/><path d="M9.5 11.5 12 9l2.5 2.5"/></svg>`,
+    chat: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-1-1.73V8a2 2 0 0 1 2-2Z"/><path d="M8 10h8"/><path d="M8 13h5"/></svg>`,
+    people: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 19a4 4 0 0 0-8 0"/><circle cx="12" cy="10" r="3"/><path d="M22 19a3.5 3.5 0 0 0-4-3.45"/><path d="M17 8a2.5 2.5 0 0 1 0 5"/><path d="M2 19a3.5 3.5 0 0 1 4-3.45"/><path d="M7 8a2.5 2.5 0 0 0 0 5"/></svg>`,
+    more: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5h.01"/><path d="M12 12h.01"/><path d="M12 19h.01"/></svg>`,
+    phone: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 10.5c3.4-2 7.6-2 11 0"/><path d="M8.5 9.5l-2 3.5 3 1.5 1.5-2.5"/><path d="M15.5 9.5l2 3.5-3 1.5-1.5-2.5"/></svg>`,
+  };
+  return `<span class="control-icon">${icons[name] || icons.more}</span>`;
 }
 
 function renderMeetingPanel(people) {
