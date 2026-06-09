@@ -636,10 +636,11 @@ function guestCanJoinMeeting(guest, meeting) {
   if (!assigned || assigned === "general access") {
     return true;
   }
+  const assignedCode = normalizeMeetingCode(guest.meeting).toLowerCase();
   const code = String(meeting.code || "").trim().toLowerCase();
   const title = String(meeting.title || "").trim().toLowerCase();
   const id = String(meeting.id || "").trim().toLowerCase();
-  return assigned === code || assigned === title || assigned === id;
+  return assigned === code || assigned === title || assigned === id || assignedCode === code || assignedCode === id;
 }
 
 function normalizeAccessMode(mode) {

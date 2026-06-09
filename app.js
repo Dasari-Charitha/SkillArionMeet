@@ -1633,10 +1633,7 @@ async function joinMeetingWithCode(codeValue) {
     state.backendOnline = true;
     render();
   } catch (error) {
-    state.joinMessage = "Meeting code was not found. Please check the code and try again.";
-    if (error.message.includes("not invited") || error.message.includes("not allowed")) {
-      state.joinMessage = error.message;
-    }
+    state.joinMessage = error.message || "Meeting code was not found. Please check the code and try again.";
     render();
   }
 }
