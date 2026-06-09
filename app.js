@@ -92,7 +92,7 @@ function render() {
         <nav class="nav workspace-nav">
           ${visibleNavItems().map(([route, icon, label]) => `
             <button class="${state.route === route ? "active" : ""}" data-route="${route}">
-              <span>${icon}</span><span>${label}</span>
+              <span>${label}</span>
             </button>
           `).join("")}
         </nav>
@@ -431,7 +431,7 @@ function renderMeeting() {
         </div>
         <nav class="meeting-route-nav">
           ${visibleNavItems().filter(([route]) => route !== "meeting").map(([route, icon, label]) => `
-            <button class="btn ghost" data-route="${route}">${icon} ${label}</button>
+            <button class="btn ghost" data-route="${route}">${label}</button>
           `).join("")}
         </nav>
       </header>
@@ -449,13 +449,13 @@ function renderMeeting() {
           `).join("")}
         </div>
         <div class="controls">
-          <button class="control ${state.micOn ? "active" : ""}" id="micBtn" title="Microphone">${state.micOn ? "Mic" : "Off"}</button>
-          <button class="control ${state.cameraOn ? "active" : ""}" id="cameraBtn" title="Camera">Cam</button>
-          <button class="control" id="screenBtn" title="Screen share">Scr</button>
+          <button class="control ${state.micOn ? "active" : ""}" id="micBtn" title="${state.micOn ? "Microphone on" : "Microphone off"}" aria-label="${state.micOn ? "Microphone on" : "Microphone off"}">${state.micOn ? "&#127908;" : "&#128263;"}</button>
+          <button class="control ${state.cameraOn ? "active" : ""}" id="cameraBtn" title="Camera" aria-label="Camera">&#128249;</button>
+          <button class="control" id="screenBtn" title="Screen share" aria-label="Screen share">&#128421;</button>
           ${canTrackAttendance ? `<button class="control track-control ${state.meetingPanel === "attendance" ? "active" : ""}" id="markAttendanceBtn" title="Track attendance">Track attendance</button>` : ""}
-          <button class="control ${state.meetingPanel === "chat" ? "active" : ""}" id="chatBtn" title="Chat">Msg</button>
-          <button class="control ${state.meetingPanel === "participants" ? "active" : ""}" id="peopleBtn" title="Participants">Ppl</button>
-          <button class="control end" id="endBtn" title="End meeting">End</button>
+          <button class="control ${state.meetingPanel === "chat" ? "active" : ""}" id="chatBtn" title="Chat" aria-label="Chat">&#128172;</button>
+          <button class="control ${state.meetingPanel === "participants" ? "active" : ""}" id="peopleBtn" title="Participants" aria-label="Participants">&#128101;</button>
+          <button class="control end" id="endBtn" title="End meeting" aria-label="End meeting">&#128222;</button>
         </div>
       </section>
       ${state.meetingPanel ? `<aside class="side-stack">
