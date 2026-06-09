@@ -140,7 +140,7 @@ async function handleApi(request, response, requestedUrl) {
   if (method === "POST" && pathname === "/api/auth/guest") {
     const body = await readJsonBody(request);
     const email = String(body.email || "").trim().toLowerCase();
-    const guest = (db.guests || []).find(item => String(item.email || "").trim().toLowerCase() === email);
+    const guest = findGuestByEmail(db, email);
     if (!guest) {
       sendJson(response, 401, { error: "Guest access not found. Ask Admin to add this guest first." });
       return;
@@ -273,12 +273,19 @@ async function handleApi(request, response, requestedUrl) {
       sendJson(response, 400, { error: "Guest name and email are required." });
       return;
     }
+    const email = String(body.email || "").trim().toLowerCase();
     const guest = {
-      name: body.name,
-      email: body.email,
+      name: String(body.name || "").trim(),
+      email,
       meeting: body.meeting || "General access",
       status: body.status || "Invited",
+      updatedAt: new Date().toISOString(),
     };
+    db.guests = db.guests || [];
+    const existingIndex = db.guests.findIndex(item => String(item.email || "").trim().toLowerCase() === email);
+    if (existingIndex >= 0) {
+      db.guests.splice(existingIndex, 1);
+    }
     db.guests.unshift(guest);
     await writeDb(db);
     sendJson(response, 201, guest);
@@ -615,11 +622,11 @@ function getMeetingAccessError(db, meeting, body) {
   }
 
   if (role === "guest") {
-    const guest = (db.guests || []).find(item => String(item.email || "").trim().toLowerCase() === email);
-    if (!guest) {
+    const guestRecords = findGuestRecordsByEmail(db, email);
+    if (!guestRecords.length) {
       return "Guest access not found. Ask Admin to add this guest first.";
     }
-    if (!guestCanJoinMeeting(guest, meeting)) {
+    if (!guestRecords.some(guest => guestCanJoinMeeting(guest, meeting))) {
       return "This guest is not assigned to this meeting. Please contact the admin.";
     }
   }
@@ -629,6 +636,21 @@ function getMeetingAccessError(db, meeting, body) {
   }
 
   return "";
+}
+
+function findGuestByEmail(db, email) {
+  return findGuestRecordsByEmail(db, email)[0];
+}
+
+function findGuestRecordsByEmail(db, email) {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  return (db.guests || [])
+    .filter(item => String(item.email || "").trim().toLowerCase() === normalizedEmail)
+    .sort((first, second) => {
+      const firstTime = Date.parse(first.updatedAt || first.createdAt || "") || 0;
+      const secondTime = Date.parse(second.updatedAt || second.createdAt || "") || 0;
+      return secondTime - firstTime;
+    });
 }
 
 function guestCanJoinMeeting(guest, meeting) {
