@@ -44,7 +44,7 @@ let attendanceRows = [];
 
 let transcriptLines = [];
 
-const chatMessages = [];
+let chatMessages = [];
 
 let guests = [];
 
@@ -480,27 +480,60 @@ function controlIcon(name) {
   return `<span class="control-icon">${icons[name] || icons.more}</span>`;
 }
 
+function activeMeetingChatMessages() {
+  const code = String(state.activeMeeting?.code || "").toUpperCase();
+  return chatMessages
+    .filter(message => !code || String(message.meetingCode || "").toUpperCase() === code)
+    .sort((first, second) => {
+      const firstTime = Date.parse(first.createdAt || "") || 0;
+      const secondTime = Date.parse(second.createdAt || "") || 0;
+      return firstTime - secondTime;
+    });
+}
+
+async function loadActiveMeetingChatMessages() {
+  if (!state.activeMeeting?.code) {
+    return;
+  }
+  try {
+    const messages = await apiRequest(`/api/chat-messages?meetingCode=${encodeURIComponent(state.activeMeeting.code)}`);
+    const otherMessages = chatMessages.filter(message => {
+      return String(message.meetingCode || "").toUpperCase() !== String(state.activeMeeting.code || "").toUpperCase();
+    });
+    chatMessages = [...otherMessages, ...messages];
+    state.backendOnline = true;
+  } catch (error) {
+    state.backendOnline = false;
+  }
+}
+
 function renderMeetingPanel(people) {
   if (state.meetingPanel === "chat") {
+    const roomMessages = activeMeetingChatMessages();
     return `
-      <section class="panel">
+      <section class="panel meeting-chat-panel">
         <div class="panel-header">
-          <h2>Chat</h2>
+          <div>
+            <h2>Meeting chat</h2>
+            <div class="muted">${state.activeMeeting?.title || "Current room"}</div>
+          </div>
           <button class="btn ghost" id="closeMeetingPanelBtn">Close</button>
         </div>
-        <div class="list">
-          ${chatMessages.length ? chatMessages.map(message => `
-            <div class="card">
-              <strong>${message.sender}</strong> <span class="muted">${message.time} | ${message.role}</span>
-              <div class="muted">${message.text}</div>
+        <div class="chat-thread">
+          ${roomMessages.length ? roomMessages.map(message => `
+            <div class="chat-bubble ${message.email === state.user.email ? "self" : ""}">
+              <div class="chat-meta">
+                <strong>${message.sender}</strong>
+                <span>${message.time} | ${message.role}</span>
+              </div>
+              <div class="chat-text">${message.text}</div>
             </div>
-          `).join("") : `<div class="card">No messages in this meeting yet.</div>`}
+          `).join("") : `<div class="chat-empty">No messages in this meeting yet.</div>`}
         </div>
-        <div class="field" style="margin-top: 14px;">
-          <label>Message</label>
+        <div class="chat-compose">
           <input id="chatInput" placeholder="Type a message" />
+          <button class="btn primary" id="sendChatBtn">Send</button>
         </div>
-        <button class="btn primary" id="sendChatBtn" style="margin-top: 10px;">Send</button>
       </section>
     `;
   }
@@ -1166,6 +1199,7 @@ async function loadBootstrapData() {
     candidates = data.candidates || candidates;
     attendanceRows = data.attendance || attendanceRows;
     transcriptLines = data.transcripts || transcriptLines;
+    chatMessages = data.chatMessages || chatMessages;
     whatsappCampaigns = data.whatsappCampaigns || whatsappCampaigns;
     state.settings = { ...state.settings, ...(data.settings || {}) };
     try {
@@ -1395,8 +1429,11 @@ function bindShell() {
 
   document.querySelector("#cameraBtn")?.addEventListener("click", toggleCamera);
   document.querySelector("#screenBtn")?.addEventListener("click", shareScreen);
-  document.querySelector("#chatBtn")?.addEventListener("click", () => {
+  document.querySelector("#chatBtn")?.addEventListener("click", async () => {
     state.meetingPanel = state.meetingPanel === "chat" ? "" : "chat";
+    if (state.meetingPanel === "chat") {
+      await loadActiveMeetingChatMessages();
+    }
     render();
   });
   document.querySelector("#peopleBtn")?.addEventListener("click", () => {
@@ -1416,6 +1453,15 @@ function bindShell() {
     const input = document.querySelector("#chatInput");
     if (input?.value.trim()) {
       sendChatMessage(input.value.trim());
+    }
+  });
+  document.querySelector("#chatInput")?.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      const input = event.currentTarget;
+      if (input?.value.trim()) {
+        sendChatMessage(input.value.trim());
+      }
     }
   });
   document.querySelector("#endBtn")?.addEventListener("click", () => {
@@ -1646,6 +1692,7 @@ async function joinMeetingWithCode(codeValue) {
     meetings = meetings.map(meeting => meeting.id === result.meeting.id ? result.meeting : meeting);
     state.route = "meeting";
     state.backendOnline = true;
+    await loadActiveMeetingChatMessages();
     render();
   } catch (error) {
     state.joinMessage = error.message || "Meeting code was not found. Please check the code and try again.";
@@ -1720,13 +1767,30 @@ async function endMeeting() {
 }
 
 async function sendChatMessage(text) {
+  const createdAt = new Date().toISOString();
   const message = {
+    id: `CHAT-${Date.now()}`,
+    meetingCode: state.activeMeeting?.code || "",
+    meetingTitle: state.activeMeeting?.title || "",
     sender: state.user.name,
+    email: state.user.email,
     role: state.user.role,
     text,
     time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    createdAt,
   };
   chatMessages.push(message);
+  if (message.meetingCode) {
+    apiRequest("/api/chat-messages", {
+      method: "POST",
+      body: JSON.stringify(message),
+    }).then(saved => {
+      chatMessages = chatMessages.map(item => item.id === message.id ? saved : item);
+      state.backendOnline = true;
+    }).catch(() => {
+      state.backendOnline = false;
+    });
+  }
 
   if (state.transcriptActive) {
     const line = {

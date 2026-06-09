@@ -24,7 +24,7 @@ const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const whatsappAccessToken = process.env.WHATSAPP_ACCESS_TOKEN || "";
 const whatsappTemplateName = process.env.WHATSAPP_TEMPLATE_NAME || "";
 const whatsappTemplateLanguage = process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en_US";
-const collectionNames = ["meetings", "guests", "candidates", "whatsappCampaigns", "attendance", "transcripts"];
+const collectionNames = ["meetings", "guests", "candidates", "whatsappCampaigns", "attendance", "transcripts", "chatMessages"];
 let mongoClient = null;
 let mongoDb = null;
 
@@ -77,6 +77,7 @@ const seedDb = {
     },
   ],
   attendance: [],
+  chatMessages: [],
   transcripts: [
     { time: "10:04", speaker: "Host", section: "Admin", text: "Welcome everyone. We will start with the project overview and then move to questions." },
     { time: "10:08", speaker: "Aarav Mehta", section: "Candidate", text: "I have experience with React, REST APIs, and dashboard workflows." },
@@ -408,6 +409,44 @@ async function handleApi(request, response, requestedUrl) {
     db.whatsappCampaigns = [];
     await writeDb(db);
     sendJson(response, 200, { ok: true, cleared: "whatsappCampaigns" });
+    return;
+  }
+
+  if (method === "GET" && pathname === "/api/chat-messages") {
+    const meetingCode = normalizeMeetingCode(requestedUrl.searchParams.get("meetingCode") || "");
+    const messages = (db.chatMessages || []).filter(message => {
+      return !meetingCode || String(message.meetingCode || "").toUpperCase() === meetingCode;
+    });
+    sendJson(response, 200, messages);
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/chat-messages") {
+    const body = await readJsonBody(request);
+    const meetingCode = normalizeMeetingCode(body.meetingCode || "");
+    if (!meetingCode) {
+      sendJson(response, 400, { error: "Meeting code is required for chat messages." });
+      return;
+    }
+    const message = {
+      id: `CHAT-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+      meetingCode,
+      meetingTitle: body.meetingTitle || "",
+      sender: body.sender || "Meeting user",
+      email: body.email || "",
+      role: body.role || "Candidate",
+      text: String(body.text || "").trim(),
+      time: body.time || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      createdAt: body.createdAt || new Date().toISOString(),
+    };
+    if (!message.text) {
+      sendJson(response, 400, { error: "Message text is required." });
+      return;
+    }
+    db.chatMessages = db.chatMessages || [];
+    db.chatMessages.unshift(message);
+    await writeDb(db);
+    sendJson(response, 201, message);
     return;
   }
 
