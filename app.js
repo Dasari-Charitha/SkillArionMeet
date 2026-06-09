@@ -307,6 +307,7 @@ function renderAdminDashboard() {
 
 function renderCandidateDashboard() {
   const transcriptCount = transcriptLines.filter(line => line.section === "Candidate").length;
+  const candidateInvite = currentCandidateRecord();
   return `
     <div class="grid">
       <section class="home-hero">
@@ -324,6 +325,7 @@ function renderCandidateDashboard() {
         <div class="stat"><div class="stat-value">Google</div><div class="stat-label">Candidate sign-in</div></div>
         <div class="stat"><div class="stat-value">${transcriptCount}</div><div class="stat-label">Transcript records</div></div>
       </div>
+      ${renderCandidateConsentCard(candidateInvite)}
       <div class="grid cols-2">
         <section class="panel">
           <div class="panel-header">
@@ -348,6 +350,68 @@ function renderCandidateDashboard() {
         </section>
       </div>
     </div>
+  `;
+}
+
+function currentCandidateRecord() {
+  const email = String(state.user?.email || "").trim().toLowerCase();
+  return candidates.find(candidate => String(candidate.email || "").trim().toLowerCase() === email);
+}
+
+function renderCandidateConsentCard(candidate) {
+  if (!candidate) {
+    return `
+      <section class="panel consent-panel">
+        <div class="panel-header">
+          <h2>Invitation status</h2>
+          <span class="pill warn">Not invited yet</span>
+        </div>
+        <div class="notice">
+          Your Google login is active, but Admin has not added this email to the candidate list yet.
+        </div>
+      </section>
+    `;
+  }
+
+  const consent = candidate.consentStatus || candidate.status || "Consent pending";
+  if (consent === "Accepted") {
+    return `
+      <section class="panel consent-panel">
+        <div class="panel-header">
+          <h2>Invitation accepted</h2>
+          <span class="pill ok">Accepted</span>
+        </div>
+        <div class="notice success">You accepted SkillArionDevelopment meeting updates. You can join meetings shared by Admin.</div>
+      </section>
+    `;
+  }
+
+  if (consent === "Declined") {
+    return `
+      <section class="panel consent-panel">
+        <div class="panel-header">
+          <h2>Invitation declined</h2>
+          <span class="pill danger">Declined</span>
+        </div>
+        <div class="notice">You declined meeting updates. Admin will see your declined status.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="panel consent-panel">
+      <div class="panel-header">
+        <h2>SkillArionDevelopment invitation</h2>
+        <span class="pill warn">Consent pending</span>
+      </div>
+      <div class="notice">
+        Admin has added you for ${candidate.program || "the meeting process"}. Please choose whether you want to receive meeting updates and join meeting sessions.
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <button class="btn primary" id="acceptCandidateInviteBtn">Accept</button>
+        <button class="btn ghost" id="declineCandidateInviteBtn">Decline</button>
+      </div>
+    </section>
   `;
 }
 
@@ -845,6 +909,7 @@ function renderCandidates() {
             <div class="field">
               <label>Status</label>
               <select id="candidateStatus">
+                <option>Consent pending</option>
                 <option>Shortlisted</option>
                 <option>Interview pending</option>
                 <option>Selected</option>
@@ -867,14 +932,26 @@ function renderCandidates() {
               <div class="person-meta">
                 <div class="name">${candidate.name}</div>
                 <div class="muted">${candidate.email} | ${candidate.phone} | ${candidate.program}</div>
+                <div class="muted">Consent: ${candidate.consentStatus || candidate.status || "Pending"}</div>
               </div>
-              <span class="pill ${candidate.status === "Shortlisted" || candidate.status === "Selected" ? "ok" : ""}">${candidate.status}</span>
+              <span class="pill ${candidateStatusClass(candidate)}">${candidate.status}</span>
             </div>
           `).join("") || `<div class="card">No candidates added yet.</div>`}
         </div>
       </section>
     </div>
   `;
+}
+
+function candidateStatusClass(candidate) {
+  const status = candidate.consentStatus || candidate.status || "";
+  if (status === "Accepted" || status === "Selected" || status === "Active") {
+    return "ok";
+  }
+  if (status === "Declined" || status === "Rejected") {
+    return "danger";
+  }
+  return "warn";
 }
 
 function renderWhatsApp() {
@@ -906,11 +983,14 @@ function renderWhatsApp() {
           <div class="field">
             <label>Saved candidates</label>
             <select id="whatsappCandidateStatus">
-              <option value="all">All saved candidates</option>
+              <option value="eligible">Eligible candidates</option>
+              <option value="Accepted">Accepted only</option>
+              <option value="Pending">Consent pending</option>
               <option value="Shortlisted">Shortlisted only</option>
               <option value="Interview pending">Interview pending</option>
               <option value="Selected">Selected</option>
               <option value="Active">Active</option>
+              <option value="all">All except declined</option>
             </select>
           </div>
           <div class="saved-candidate-picker">
@@ -1485,6 +1565,8 @@ function bindShell() {
     button.addEventListener("click", () => clearHistory(button.dataset.clearHistory));
   });
   document.querySelector("#addCandidateBtn")?.addEventListener("click", addCandidate);
+  document.querySelector("#acceptCandidateInviteBtn")?.addEventListener("click", () => updateCandidateConsent("accepted"));
+  document.querySelector("#declineCandidateInviteBtn")?.addEventListener("click", () => updateCandidateConsent("declined"));
   document.querySelector("#addGuestBtn")?.addEventListener("click", addGuest);
   document.querySelector("#createMeetingBtn")?.addEventListener("click", createMeeting);
   document.querySelector("#copyMeetingCodeBtn")?.addEventListener("click", copyMeetingCode);
@@ -1860,7 +1942,7 @@ function previewWhatsappCsv(event) {
 
 function renderWhatsappCandidatePicker() {
   const filtered = candidates.filter(candidate => {
-    return state.whatsappCandidateStatus === "all" || candidate.status === state.whatsappCandidateStatus;
+    return candidateMatchesWhatsappFilter(candidate);
   });
   if (!filtered.length) {
     return `<div class="muted">No saved candidates match this status.</div>`;
@@ -1870,10 +1952,27 @@ function renderWhatsappCandidatePicker() {
       <input type="checkbox" class="whatsappCandidateCheck" value="${candidate.email}" />
       <span>
         <strong>${candidate.name}</strong>
-        <small>${candidate.phone} | ${candidate.status}</small>
+        <small>${candidate.phone} | ${candidate.status} | Consent: ${candidate.consentStatus || "Pending"}</small>
       </span>
     </label>
   `).join("");
+}
+
+function candidateMatchesWhatsappFilter(candidate) {
+  const consent = candidate.consentStatus || (candidate.status === "Consent pending" ? "Pending" : candidate.status);
+  if (consent === "Declined" || candidate.status === "Rejected") {
+    return false;
+  }
+  if (state.whatsappCandidateStatus === "eligible" || state.whatsappCandidateStatus === "all") {
+    return true;
+  }
+  if (state.whatsappCandidateStatus === "Pending") {
+    return consent === "Pending" || candidate.status === "Consent pending";
+  }
+  if (state.whatsappCandidateStatus === "Accepted") {
+    return consent === "Accepted";
+  }
+  return candidate.status === state.whatsappCandidateStatus || consent === state.whatsappCandidateStatus;
 }
 
 function addSelectedCandidatesToWhatsapp() {
@@ -2083,14 +2182,14 @@ async function addCandidate() {
   const email = document.querySelector("#candidateEmail")?.value.trim();
   const phone = normalizePhone(document.querySelector("#candidatePhone")?.value);
   const program = document.querySelector("#candidateProgram")?.value || "Internship";
-  const status = document.querySelector("#candidateStatus")?.value || "Shortlisted";
+  const status = document.querySelector("#candidateStatus")?.value || "Consent pending";
 
   if (!name || !email || !phone) {
     alert("Candidate name, email, and WhatsApp number are required.");
     return;
   }
 
-  const candidate = { name, email, phone, program, status };
+  const candidate = { name, email, phone, program, status, consentStatus: status === "Consent pending" ? "Pending" : status };
   try {
     const saved = await apiRequest("/api/candidates", {
       method: "POST",
@@ -2103,6 +2202,28 @@ async function addCandidate() {
     state.backendOnline = false;
   }
   render();
+}
+
+async function updateCandidateConsent(decision) {
+  const email = String(state.user?.email || "").trim().toLowerCase();
+  if (!email) {
+    alert("Candidate email was not found.");
+    return;
+  }
+  try {
+    const updated = await apiRequest(`/api/candidates/${encodeURIComponent(email)}/consent`, {
+      method: "PUT",
+      body: JSON.stringify({ decision }),
+    });
+    candidates = candidates.map(candidate => {
+      return String(candidate.email || "").trim().toLowerCase() === email ? updated : candidate;
+    });
+    state.backendOnline = true;
+    render();
+  } catch (error) {
+    alert(error.message || "Could not update invitation status.");
+    state.backendOnline = false;
+  }
 }
 
 async function saveSettings() {

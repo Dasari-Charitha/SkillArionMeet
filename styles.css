@@ -993,6 +993,15 @@ button {
   color: #795d1d;
 }
 
+.pill.danger {
+  background: #fdeaea;
+  color: var(--danger);
+}
+
+.consent-panel {
+  border-color: rgba(179, 145, 69, 0.38);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

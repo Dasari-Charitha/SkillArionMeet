@@ -311,13 +311,45 @@ async function handleApi(request, response, requestedUrl) {
       email: String(body.email || "").trim().toLowerCase(),
       phone,
       program: body.program || "Internship",
-      status: body.status || "Shortlisted",
+      status: body.status || "Consent pending",
+      consentStatus: body.consentStatus || "Pending",
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     db.candidates = db.candidates || [];
+    const existingIndex = db.candidates.findIndex(item => String(item.email || "").trim().toLowerCase() === candidate.email);
+    if (existingIndex >= 0) {
+      const existing = db.candidates[existingIndex];
+      db.candidates.splice(existingIndex, 1);
+      candidate.createdAt = existing.createdAt || candidate.createdAt;
+    }
     db.candidates.unshift(candidate);
     await writeDb(db);
     sendJson(response, 201, candidate);
+    return;
+  }
+
+  const candidateConsentMatch = pathname.match(/^\/api\/candidates\/(.+)\/consent$/);
+  if (method === "PUT" && candidateConsentMatch) {
+    const email = decodeURIComponent(candidateConsentMatch[1]).trim().toLowerCase();
+    const body = await readJsonBody(request);
+    const decision = String(body.decision || "").toLowerCase();
+    if (!["accepted", "declined"].includes(decision)) {
+      sendJson(response, 400, { error: "Consent decision must be accepted or declined." });
+      return;
+    }
+    db.candidates = db.candidates || [];
+    const candidate = db.candidates.find(item => String(item.email || "").trim().toLowerCase() === email);
+    if (!candidate) {
+      sendJson(response, 404, { error: "Candidate invitation was not found." });
+      return;
+    }
+    candidate.consentStatus = decision === "accepted" ? "Accepted" : "Declined";
+    candidate.status = candidate.consentStatus;
+    candidate.consentUpdatedAt = new Date().toISOString();
+    candidate.updatedAt = candidate.consentUpdatedAt;
+    await writeDb(db);
+    sendJson(response, 200, candidate);
     return;
   }
 
@@ -654,6 +686,16 @@ function getMeetingAccessError(db, meeting, body) {
 
   if (accessMode === "candidates" && role !== "candidate") {
     return "You are not allowed to join this meeting. This meeting is for candidates only.";
+  }
+
+  if (role === "candidate") {
+    const candidate = (db.candidates || []).find(item => String(item.email || "").trim().toLowerCase() === email);
+    if (!candidate) {
+      return "Candidate invitation was not found. Please contact the admin.";
+    }
+    if ((candidate.consentStatus || candidate.status) !== "Accepted") {
+      return "Please accept the SkillArionDevelopment invitation before joining meetings.";
+    }
   }
 
   if (accessMode === "guests" && role !== "guest") {
