@@ -1024,19 +1024,11 @@ async function copyCandidateInvitation(email) {
     alert("Invitation link is not available for this candidate.");
     return;
   }
-  const message = [
-    `Hello ${candidate.name},`,
-    "",
-    "SkillArionDevelopment has invited you to receive meeting updates and access SkillArionMeet sessions.",
-    `Accept or decline here: ${inviteLink}`,
-    "",
-    "Please use the same email address when you sign in with Google.",
-  ].join("\n");
   try {
-    await navigator.clipboard.writeText(message);
-    alert("Candidate invitation message copied.");
+    await navigator.clipboard.writeText(inviteLink);
+    alert("Candidate invitation link copied.");
   } catch (error) {
-    alert(message);
+    alert(`Invitation link: ${inviteLink}`);
   }
 }
 
