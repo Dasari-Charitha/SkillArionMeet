@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 loadEnvFile();
 
@@ -109,6 +110,9 @@ server.listen(port, "127.0.0.1", () => {
 
 async function handleApi(request, response, requestedUrl) {
   const db = await readDb();
+  if (ensureCandidateInvitationTokens(db)) {
+    await writeDb(db);
+  }
   const method = request.method;
   const pathname = requestedUrl.pathname;
 
@@ -313,6 +317,7 @@ async function handleApi(request, response, requestedUrl) {
       program: body.program || "Internship",
       status: body.status || "Consent pending",
       consentStatus: body.consentStatus || "Pending",
+      invitationToken: body.invitationToken || createInvitationToken(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -322,6 +327,7 @@ async function handleApi(request, response, requestedUrl) {
       const existing = db.candidates[existingIndex];
       db.candidates.splice(existingIndex, 1);
       candidate.createdAt = existing.createdAt || candidate.createdAt;
+      candidate.invitationToken = existing.invitationToken || candidate.invitationToken;
     }
     db.candidates.unshift(candidate);
     await writeDb(db);
@@ -350,6 +356,38 @@ async function handleApi(request, response, requestedUrl) {
     candidate.updatedAt = candidate.consentUpdatedAt;
     await writeDb(db);
     sendJson(response, 200, candidate);
+    return;
+  }
+
+  const invitationMatch = pathname.match(/^\/api\/candidate-invitations\/([^/]+)$/);
+  if (method === "GET" && invitationMatch) {
+    const candidate = findCandidateByInvitationToken(db, invitationMatch[1]);
+    if (!candidate) {
+      sendJson(response, 404, { error: "Invitation link was not found." });
+      return;
+    }
+    sendJson(response, 200, publicCandidateInvitation(candidate));
+    return;
+  }
+
+  if (method === "PUT" && invitationMatch) {
+    const candidate = findCandidateByInvitationToken(db, invitationMatch[1]);
+    if (!candidate) {
+      sendJson(response, 404, { error: "Invitation link was not found." });
+      return;
+    }
+    const body = await readJsonBody(request);
+    const decision = String(body.decision || "").toLowerCase();
+    if (!["accepted", "declined"].includes(decision)) {
+      sendJson(response, 400, { error: "Consent decision must be accepted or declined." });
+      return;
+    }
+    candidate.consentStatus = decision === "accepted" ? "Accepted" : "Declined";
+    candidate.status = candidate.consentStatus;
+    candidate.consentUpdatedAt = new Date().toISOString();
+    candidate.updatedAt = candidate.consentUpdatedAt;
+    await writeDb(db);
+    sendJson(response, 200, publicCandidateInvitation(candidate));
     return;
   }
 
@@ -769,6 +807,42 @@ function normalizeWhatsappRecipients(value) {
     }
   });
   return Array.from(byPhone.values());
+}
+
+function createInvitationToken() {
+  return crypto.randomBytes(18).toString("base64url");
+}
+
+function ensureCandidateInvitationTokens(db) {
+  let changed = false;
+  db.candidates = db.candidates || [];
+  db.candidates.forEach(candidate => {
+    if (!candidate.invitationToken) {
+      candidate.invitationToken = createInvitationToken();
+      candidate.updatedAt = candidate.updatedAt || new Date().toISOString();
+      changed = true;
+    }
+    if (!candidate.consentStatus) {
+      candidate.consentStatus = candidate.status === "Accepted" || candidate.status === "Declined" ? candidate.status : "Pending";
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function findCandidateByInvitationToken(db, token) {
+  const normalizedToken = String(token || "").trim();
+  return (db.candidates || []).find(candidate => candidate.invitationToken === normalizedToken);
+}
+
+function publicCandidateInvitation(candidate) {
+  return {
+    name: candidate.name,
+    email: candidate.email,
+    program: candidate.program,
+    status: candidate.status,
+    consentStatus: candidate.consentStatus || candidate.status || "Pending",
+  };
 }
 
 function getWhatsappStatus() {

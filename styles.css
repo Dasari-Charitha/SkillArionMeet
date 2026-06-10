@@ -1002,6 +1002,23 @@ button {
   border-color: rgba(179, 145, 69, 0.38);
 }
 
+.candidate-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.compact-btn {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.invite-screen .login-panel {
+  align-self: center;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

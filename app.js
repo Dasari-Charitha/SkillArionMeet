@@ -9,6 +9,9 @@ const state = {
   transcriptActive: false,
   backendOnline: false,
   pendingJoinCode: new URLSearchParams(window.location.search).get("meet") || "",
+  pendingInviteToken: new URLSearchParams(window.location.search).get("invite") || "",
+  inviteRecord: null,
+  inviteMessage: "",
   activeMeeting: null,
   activeAttendance: null,
   lastCreatedMeeting: null,
@@ -73,6 +76,11 @@ const roleRoutes = {
 
 function render() {
   const app = document.querySelector("#app");
+  if (state.pendingInviteToken && !state.user) {
+    app.innerHTML = renderInvitationPage();
+    bindInvitationPage();
+    return;
+  }
   if (!state.user) {
     app.innerHTML = renderLogin();
     bindLogin();
@@ -172,6 +180,51 @@ function renderLogin() {
           <div class="muted" id="googleLoginStatus"></div>
         </div>
         <button class="btn primary" id="loginBtn">Continue</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderInvitationPage() {
+  const candidate = state.inviteRecord;
+  const accepted = state.inviteMessage.includes("accepted");
+  const declined = state.inviteMessage.includes("declined");
+  return `
+    <section class="login-screen invite-screen">
+      <div class="login-intro">
+        <div class="brand login-brand">
+          <img class="brand-logo" src="assets/logo.png" alt="Skill Arion logo" />
+          <div>
+            <div class="brand-title">SkillArionMeet</div>
+            <div class="brand-subtitle">SkillArionDevelopment.in</div>
+          </div>
+        </div>
+        <div>
+          <div class="login-kicker">Candidate invitation</div>
+          <h1>Confirm your SkillArionDevelopment meeting invitation.</h1>
+          <p>Choose whether you want to receive meeting updates and access meeting sessions through SkillArionMeet.</p>
+        </div>
+      </div>
+      <div class="login-panel">
+        <div class="login-panel-header">
+          <h2>${candidate ? "Invitation details" : "Loading invitation"}</h2>
+          <p>${state.inviteMessage || "Checking the invitation link..."}</p>
+        </div>
+        ${candidate ? `
+          <div class="card">
+            <strong>${candidate.name}</strong>
+            <div class="muted">${candidate.email} | ${candidate.program || "Candidate"}</div>
+            <div class="muted">Status: ${candidate.consentStatus || candidate.status || "Pending"}</div>
+          </div>
+        ` : ""}
+        ${candidate && !accepted && !declined ? `
+          <div class="actions" style="margin-top: 14px;">
+            <button class="btn primary" id="acceptInviteLinkBtn">Accept invitation</button>
+            <button class="btn ghost" id="declineInviteLinkBtn">Decline</button>
+          </div>
+        ` : ""}
+        ${accepted ? `<button class="btn primary" id="continueAfterInviteBtn" style="margin-top: 14px;">Continue to candidate login</button>` : ""}
+        ${declined ? `<button class="btn ghost" id="continueAfterInviteBtn" style="margin-top: 14px;">Back to login</button>` : ""}
       </div>
     </section>
   `;
@@ -934,7 +987,10 @@ function renderCandidates() {
                 <div class="muted">${candidate.email} | ${candidate.phone} | ${candidate.program}</div>
                 <div class="muted">Consent: ${candidate.consentStatus || candidate.status || "Pending"}</div>
               </div>
-              <span class="pill ${candidateStatusClass(candidate)}">${candidate.status}</span>
+              <div class="candidate-actions">
+                <span class="pill ${candidateStatusClass(candidate)}">${candidate.status}</span>
+                ${candidate.invitationToken ? `<button class="btn ghost compact-btn" data-copy-invite="${candidate.email}">Copy invite</button>` : ""}
+              </div>
             </div>
           `).join("") || `<div class="card">No candidates added yet.</div>`}
         </div>
@@ -952,6 +1008,36 @@ function candidateStatusClass(candidate) {
     return "danger";
   }
   return "warn";
+}
+
+function getCandidateInvitationLink(candidate) {
+  if (!candidate?.invitationToken) {
+    return "";
+  }
+  return `${window.location.origin}${window.location.pathname}?invite=${encodeURIComponent(candidate.invitationToken)}`;
+}
+
+async function copyCandidateInvitation(email) {
+  const candidate = candidates.find(item => String(item.email || "").trim().toLowerCase() === String(email || "").trim().toLowerCase());
+  const inviteLink = getCandidateInvitationLink(candidate);
+  if (!candidate || !inviteLink) {
+    alert("Invitation link is not available for this candidate.");
+    return;
+  }
+  const message = [
+    `Hello ${candidate.name},`,
+    "",
+    "SkillArionDevelopment has invited you to receive meeting updates and access SkillArionMeet sessions.",
+    `Accept or decline here: ${inviteLink}`,
+    "",
+    "Please use the same email address when you sign in with Google.",
+  ].join("\n");
+  try {
+    await navigator.clipboard.writeText(message);
+    alert("Candidate invitation message copied.");
+  } catch (error) {
+    alert(message);
+  }
 }
 
 function renderWhatsApp() {
@@ -1294,6 +1380,38 @@ async function loadBootstrapData() {
   }
 }
 
+async function loadInvitationDetails() {
+  if (!state.pendingInviteToken || state.inviteRecord) {
+    return;
+  }
+  try {
+    state.inviteRecord = await apiRequest(`/api/candidate-invitations/${encodeURIComponent(state.pendingInviteToken)}`);
+    state.inviteMessage = "Please accept or decline this invitation.";
+    state.backendOnline = true;
+  } catch (error) {
+    state.inviteMessage = error.message || "Invitation link was not found.";
+    state.backendOnline = false;
+  }
+}
+
+async function respondToInvitation(decision) {
+  try {
+    const updated = await apiRequest(`/api/candidate-invitations/${encodeURIComponent(state.pendingInviteToken)}`, {
+      method: "PUT",
+      body: JSON.stringify({ decision }),
+    });
+    state.inviteRecord = updated;
+    state.inviteMessage = decision === "accepted"
+      ? "Invitation accepted. You can now continue to candidate login."
+      : "Invitation declined. Admin will see your declined status.";
+    state.backendOnline = true;
+    render();
+  } catch (error) {
+    alert(error.message || "Could not update invitation.");
+    state.backendOnline = false;
+  }
+}
+
 async function apiRequest(path, options = {}) {
   const response = await fetch(path, {
     headers: {
@@ -1440,6 +1558,21 @@ function bindLogin() {
   updateLoginMode();
 }
 
+function bindInvitationPage() {
+  if (!state.inviteRecord && !state.inviteMessage) {
+    loadInvitationDetails().then(() => render());
+  }
+  document.querySelector("#acceptInviteLinkBtn")?.addEventListener("click", () => respondToInvitation("accepted"));
+  document.querySelector("#declineInviteLinkBtn")?.addEventListener("click", () => respondToInvitation("declined"));
+  document.querySelector("#continueAfterInviteBtn")?.addEventListener("click", () => {
+    state.pendingInviteToken = "";
+    state.inviteRecord = null;
+    state.inviteMessage = "";
+    window.history.replaceState({}, "", window.location.pathname);
+    render();
+  });
+}
+
 async function handleGoogleCredential(response) {
   const profile = parseJwt(response.credential);
   state.user = {
@@ -1565,6 +1698,9 @@ function bindShell() {
     button.addEventListener("click", () => clearHistory(button.dataset.clearHistory));
   });
   document.querySelector("#addCandidateBtn")?.addEventListener("click", addCandidate);
+  document.querySelectorAll("[data-copy-invite]").forEach(button => {
+    button.addEventListener("click", () => copyCandidateInvitation(button.dataset.copyInvite));
+  });
   document.querySelector("#acceptCandidateInviteBtn")?.addEventListener("click", () => updateCandidateConsent("accepted"));
   document.querySelector("#declineCandidateInviteBtn")?.addEventListener("click", () => updateCandidateConsent("declined"));
   document.querySelector("#addGuestBtn")?.addEventListener("click", addGuest);
