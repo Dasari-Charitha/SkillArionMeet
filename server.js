@@ -335,6 +335,13 @@ async function handleApi(request, response, requestedUrl) {
     return;
   }
 
+  if (method === "DELETE" && pathname === "/api/candidates") {
+    db.candidates = [];
+    await writeDb(db);
+    sendJson(response, 200, { ok: true, cleared: "candidates" });
+    return;
+  }
+
   const candidateConsentMatch = pathname.match(/^\/api\/candidates\/(.+)\/consent$/);
   if (method === "PUT" && candidateConsentMatch) {
     const email = decodeURIComponent(candidateConsentMatch[1]).trim().toLowerCase();
