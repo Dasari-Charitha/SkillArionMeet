@@ -1192,12 +1192,14 @@ function renderSettings() {
     `;
   }
 
-  const backendStatus = state.backendOnline ? "Connected" : "Reconnecting";
   return `
     <div class="grid">
       <div class="grid cols-2">
         <section class="panel">
-          <div class="panel-header"><h2>Meeting controls</h2></div>
+          <div class="panel-header">
+            <h2>Meeting controls</h2>
+            <button class="btn primary" id="saveSettingsBtn">Save settings</button>
+          </div>
           <div class="grid">
             <div class="field">
               <label>Company domain</label>
@@ -1244,18 +1246,6 @@ function renderSettings() {
           </div>
         </section>
       </div>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>System status</h2>
-          <button class="btn primary" id="saveSettingsBtn">Save settings</button>
-        </div>
-        <div class="status-strip">
-          <span><strong>Backend:</strong> ${backendStatus}</span>
-          <span><strong>Storage:</strong> ${state.settings.databaseMode}</span>
-          <span><strong>WhatsApp:</strong> ${state.settings.whatsappApiStatus}</span>
-          <span><strong>Deployment:</strong> ${state.settings.deploymentTarget}</span>
-        </div>
-      </section>
       <section class="panel">
         <div class="panel-header">
           <h2>Data cleanup</h2>

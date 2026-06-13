@@ -713,24 +713,6 @@ button {
   color: var(--ink);
 }
 
-.status-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.status-strip span {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--muted);
-  padding: 10px 12px;
-}
-
-.status-strip strong {
-  color: var(--ink);
-}
-
 .meeting-room {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
