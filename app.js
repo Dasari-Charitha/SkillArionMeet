@@ -894,7 +894,7 @@ function buildAttendanceSummary(rows) {
 
 function renderTranscripts() {
   if (state.user?.role !== "Admin") {
-    const candidateLines = transcriptLines.filter(line => line.section === "Candidate");
+    const candidateLines = visibleTranscriptLines("Candidate");
     return `
       <section class="panel">
         <div class="panel-header">
@@ -907,8 +907,8 @@ function renderTranscripts() {
       </section>
     `;
   }
-  const adminLines = transcriptLines.filter(line => line.section === "Admin");
-  const candidateLines = transcriptLines.filter(line => line.section === "Candidate");
+  const adminLines = visibleTranscriptLines("Admin");
+  const candidateLines = visibleTranscriptLines("Candidate");
 
   return `
     <div class="grid cols-2">
@@ -916,6 +916,9 @@ function renderTranscripts() {
         <div class="panel-header">
           <h2>Admin section</h2>
           <button class="btn primary" id="startTranscriptBtn">${state.transcriptActive ? "Stop transcript" : "Start transcript"}</button>
+        </div>
+        <div class="notice ${state.transcriptActive ? "success" : ""}">
+          ${state.transcriptActive ? "Transcript capture is active. New meeting chat messages will be added here." : "Transcript capture is paused. Start it to save meeting chat messages into transcripts."}
         </div>
         <div class="list">
           ${adminLines.length ? adminLines.map(transcriptLine).join("") : `<div class="card">No admin transcript entries yet.</div>`}
@@ -932,6 +935,17 @@ function renderTranscripts() {
       </section>
     </div>
   `;
+}
+
+function visibleTranscriptLines(section) {
+  return transcriptLines.filter(line => {
+    return line.section === section && !isTranscriptStatusLine(line);
+  });
+}
+
+function isTranscriptStatusLine(line) {
+  const text = String(line.text || "").toLowerCase();
+  return text.includes("transcript capture is now active") || text.includes("transcript capture is paused");
 }
 
 function renderCandidates() {
@@ -2014,26 +2028,13 @@ async function sendChatMessage(text) {
 
 function toggleTranscript() {
   state.transcriptActive = !state.transcriptActive;
-  const line = {
-    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    speaker: "Admin",
-    section: "Admin",
-    text: state.transcriptActive ? "Transcript capture is now active. New meeting messages will be added here." : "Transcript capture is paused.",
-  };
-  transcriptLines.unshift(line);
-  apiRequest("/api/transcripts", {
-    method: "POST",
-    body: JSON.stringify(line),
-  }).catch(() => {
-    state.backendOnline = false;
-  });
   render();
 }
 
 function downloadTranscript() {
   const allowedSection = state.user?.role === "Admin" ? null : "Candidate";
   const lines = transcriptLines
-    .filter(line => !allowedSection || line.section === allowedSection)
+    .filter(line => (!allowedSection || line.section === allowedSection) && !isTranscriptStatusLine(line))
     .map(line => `[${line.time}] ${line.speaker}: ${line.text}`)
     .join("\n");
   const blob = new Blob([lines], { type: "text/plain;charset=utf-8" });
