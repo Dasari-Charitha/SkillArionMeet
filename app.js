@@ -7,6 +7,8 @@ const state = {
   meetingPanel: "",
   attendanceTracking: false,
   transcriptActive: false,
+  transcriptSpeechListening: false,
+  transcriptSpeechMessage: "",
   backendOnline: false,
   pendingJoinCode: new URLSearchParams(window.location.search).get("meet") || "",
   pendingInviteToken: new URLSearchParams(window.location.search).get("invite") || "",
@@ -56,6 +58,8 @@ let candidates = [];
 let whatsappCampaigns = [];
 
 let whatsappDraftRecipients = [];
+
+let transcriptRecognition = null;
 
 const navItems = [
   ["dashboard", "D", "Home"],
@@ -918,7 +922,7 @@ function renderTranscripts() {
           <button class="btn primary" id="startTranscriptBtn">${state.transcriptActive ? "Stop transcript" : "Start transcript"}</button>
         </div>
         <div class="notice ${state.transcriptActive ? "success" : ""}">
-          ${state.transcriptActive ? "Transcript capture is active. New meeting chat messages will be added here." : "Transcript capture is paused. Start it to save meeting chat messages into transcripts."}
+          ${transcriptStatusText()}
         </div>
         <div class="list">
           ${adminLines.length ? adminLines.map(transcriptLine).join("") : `<div class="card">No admin transcript entries yet.</div>`}
@@ -935,6 +939,16 @@ function renderTranscripts() {
       </section>
     </div>
   `;
+}
+
+function transcriptStatusText() {
+  if (!state.transcriptActive) {
+    return "Transcript capture is paused. Start it to save meeting chat messages and supported voice speech into transcripts.";
+  }
+  if (state.transcriptSpeechListening) {
+    return "Transcript capture is active. Chat messages and your microphone speech are being added here.";
+  }
+  return state.transcriptSpeechMessage || "Transcript capture is active. Chat messages will be added here.";
 }
 
 function visibleTranscriptLines(section) {
@@ -1946,6 +1960,10 @@ function extractMeetingCode(value) {
 
 async function endMeeting() {
   stopCamera();
+  if (state.transcriptActive) {
+    state.transcriptActive = false;
+    stopSpeechTranscript();
+  }
 
   if (state.activeMeeting?.code) {
     try {
@@ -2007,18 +2025,11 @@ async function sendChatMessage(text) {
   }
 
   if (state.transcriptActive) {
-    const line = {
+    saveTranscriptLine({
       time: message.time,
       speaker: message.sender,
       section: state.user.role === "Admin" ? "Admin" : "Candidate",
       text,
-    };
-    transcriptLines.unshift(line);
-    apiRequest("/api/transcripts", {
-      method: "POST",
-      body: JSON.stringify(line),
-    }).catch(() => {
-      state.backendOnline = false;
     });
   }
 
@@ -2026,9 +2037,118 @@ async function sendChatMessage(text) {
   render();
 }
 
+function saveTranscriptLine(line) {
+  const transcript = {
+    time: line.time || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    speaker: line.speaker || state.user?.name || "Meeting user",
+    section: line.section || (state.user?.role === "Admin" ? "Admin" : "Candidate"),
+    text: String(line.text || "").trim(),
+  };
+  if (!transcript.text) {
+    return;
+  }
+  transcriptLines.unshift(transcript);
+  apiRequest("/api/transcripts", {
+    method: "POST",
+    body: JSON.stringify(transcript),
+  }).catch(() => {
+    state.backendOnline = false;
+  });
+}
+
 function toggleTranscript() {
   state.transcriptActive = !state.transcriptActive;
+  if (state.transcriptActive) {
+    startSpeechTranscript();
+  } else {
+    stopSpeechTranscript();
+  }
   render();
+}
+
+function startSpeechTranscript() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    state.transcriptSpeechListening = false;
+    state.transcriptSpeechMessage = "Transcript capture is active for chat messages. Voice speech-to-text is not supported in this browser.";
+    return;
+  }
+
+  stopSpeechTranscript();
+  transcriptRecognition = new SpeechRecognition();
+  transcriptRecognition.continuous = true;
+  transcriptRecognition.interimResults = false;
+  transcriptRecognition.lang = "en-IN";
+
+  transcriptRecognition.onstart = () => {
+    state.transcriptSpeechListening = true;
+    state.transcriptSpeechMessage = "Voice transcript is listening through this browser microphone.";
+    render();
+  };
+
+  transcriptRecognition.onresult = event => {
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const result = event.results[index];
+      if (!result.isFinal) {
+        continue;
+      }
+      const text = result[0]?.transcript?.trim();
+      if (text) {
+        saveTranscriptLine({
+          speaker: state.user?.name || "Meeting user",
+          section: state.user?.role === "Admin" ? "Admin" : "Candidate",
+          text,
+        });
+      }
+    }
+    render();
+  };
+
+  transcriptRecognition.onerror = event => {
+    state.transcriptSpeechListening = false;
+    state.transcriptSpeechMessage = event.error === "not-allowed"
+      ? "Microphone permission was blocked. Chat messages will still be saved into transcripts."
+      : "Voice transcript paused by the browser. Chat messages will still be saved.";
+    render();
+  };
+
+  transcriptRecognition.onend = () => {
+    state.transcriptSpeechListening = false;
+    if (state.transcriptActive) {
+      try {
+        transcriptRecognition.start();
+      } catch (error) {
+        state.transcriptSpeechMessage = "Voice transcript paused. Chat messages will still be saved.";
+        render();
+      }
+    } else {
+      render();
+    }
+  };
+
+  try {
+    transcriptRecognition.start();
+  } catch (error) {
+    state.transcriptSpeechListening = false;
+    state.transcriptSpeechMessage = "Voice transcript could not start. Chat messages will still be saved.";
+  }
+}
+
+function stopSpeechTranscript() {
+  if (transcriptRecognition) {
+    const recognition = transcriptRecognition;
+    transcriptRecognition = null;
+    recognition.onend = null;
+    try {
+      recognition.stop();
+    } catch (error) {
+      // Browser may already have stopped listening.
+    }
+  }
+  state.transcriptSpeechListening = false;
+  if (!state.transcriptActive) {
+    state.transcriptSpeechMessage = "";
+  }
 }
 
 function downloadTranscript() {
