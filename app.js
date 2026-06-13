@@ -1282,6 +1282,8 @@ function renderSettings() {
         <div class="actions">
           <button class="btn danger" data-clear-history="attendance">Clear attendance</button>
           <button class="btn danger" data-clear-history="meetings">Clear meetings</button>
+          <button class="btn danger" data-clear-history="transcripts">Clear transcripts</button>
+          <button class="btn danger" data-clear-history="chat-messages">Clear meeting chat</button>
           <button class="btn danger" data-clear-history="whatsapp-campaigns">Clear WhatsApp history</button>
         </div>
         <div class="muted" style="margin-top: 10px;">Use this only to remove old testing history. Candidates and guests are not deleted here.</div>
@@ -2492,6 +2494,8 @@ async function clearHistory(type) {
   const labels = {
     attendance: "attendance records",
     meetings: "meeting history",
+    transcripts: "transcript history",
+    "chat-messages": "meeting chat history",
     "whatsapp-campaigns": "WhatsApp campaign history",
   };
   if (!confirm(`Clear ${labels[type] || "history"}? This cannot be undone.`)) {
@@ -2499,6 +2503,7 @@ async function clearHistory(type) {
   }
   try {
     await apiRequest(`/api/${type}`, { method: "DELETE" });
+    clearLocalHistoryState(type);
     await loadBootstrapData();
     state.backendOnline = true;
     alert(`${labels[type] || "History"} cleared.`);
@@ -2507,6 +2512,22 @@ async function clearHistory(type) {
     alert(error.message);
   }
   render();
+}
+
+function clearLocalHistoryState(type) {
+  if (type === "attendance") {
+    attendanceRows = [];
+  } else if (type === "meetings") {
+    meetings = [];
+    state.activeMeeting = null;
+    state.activeAttendance = null;
+  } else if (type === "transcripts") {
+    transcriptLines = [];
+  } else if (type === "chat-messages") {
+    chatMessages = [];
+  } else if (type === "whatsapp-campaigns") {
+    whatsappCampaigns = [];
+  }
 }
 
 function initials(name) {

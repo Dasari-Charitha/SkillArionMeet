@@ -482,6 +482,13 @@ async function handleApi(request, response, requestedUrl) {
     return;
   }
 
+  if (method === "DELETE" && pathname === "/api/chat-messages") {
+    db.chatMessages = [];
+    await writeDb(db);
+    sendJson(response, 200, { ok: true, cleared: "chatMessages" });
+    return;
+  }
+
   if (method === "GET" && pathname === "/api/chat-messages") {
     const meetingCode = normalizeMeetingCode(requestedUrl.searchParams.get("meetingCode") || "");
     const messages = (db.chatMessages || []).filter(message => {
@@ -536,6 +543,13 @@ async function handleApi(request, response, requestedUrl) {
     db.transcripts.unshift(line);
     await writeDb(db);
     sendJson(response, 201, line);
+    return;
+  }
+
+  if (method === "DELETE" && pathname === "/api/transcripts") {
+    db.transcripts = [];
+    await writeDb(db);
+    sendJson(response, 200, { ok: true, cleared: "transcripts" });
     return;
   }
 
