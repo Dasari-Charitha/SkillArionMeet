@@ -1,9 +1,13 @@
 const state = {
   route: "dashboard",
   user: null,
-  micOn: true,
+  authToken: "",
+  micOn: false,
   cameraOn: false,
   stream: null,
+  audioStream: null,
+  screenStream: null,
+  screenSharing: false,
   meetingPanel: "",
   attendanceTracking: false,
   transcriptActive: false,
@@ -21,16 +25,10 @@ const state = {
   leaveMessage: "",
   settings: {
     capacityLimit: 1000,
-    guestAccess: "Invite link",
-    transcriptMode: "Manual start",
     candidateTranscriptAccess: true,
-    exportFormat: "CSV",
-    databaseMode: "Local JSON database",
-    deploymentTarget: "Not deployed",
-    whatsappApiStatus: "Not configured",
   },
   attendanceFilter: {
-    from: "2026-05-01",
+    from: "",
     to: new Date().toISOString().slice(0, 10),
     role: "all",
   },
@@ -38,6 +36,7 @@ const state = {
   whatsappDraftManual: "",
   whatsappDraftMessage: "",
   whatsappDraftScheduledAt: "",
+  whatsappMeetingCode: "",
   whatsappCandidateStatus: "all",
 };
 
@@ -129,6 +128,7 @@ function render() {
 }
 
 function renderLogin() {
+  const joiningMeeting = Boolean(state.pendingJoinCode);
   return `
     <section class="login-screen">
       <div class="login-intro">
@@ -152,14 +152,14 @@ function renderLogin() {
       </div>
       <div class="login-panel">
         <div class="login-panel-header">
-          <h2>Choose access</h2>
-          <p>${state.backendOnline ? "Backend connected. Local records will persist." : "Backend is starting. Login still works while it reconnects."}</p>
+          <h2>${joiningMeeting ? "Join meeting" : "Choose access"}</h2>
+          <p>${joiningMeeting ? `Meeting ${state.pendingJoinCode} is ready. Continue with your approved account.` : "Sign in with your approved company access."}</p>
         </div>
         <div class="role-grid">
-          <button class="role-card active" data-role="Admin">
+          <button class="role-card ${joiningMeeting ? "" : "active"}" data-role="Admin">
             <strong>Admin</strong><br /><span class="muted">Company dashboard access</span>
           </button>
-          <button class="role-card" data-role="Candidate">
+          <button class="role-card ${joiningMeeting ? "active" : ""}" data-role="Candidate">
             <strong>Candidate</strong><br /><span class="muted">Google sign-in</span>
           </button>
           <button class="role-card" data-role="Guest">
@@ -232,19 +232,6 @@ function renderInvitationPage() {
       </div>
     </section>
   `;
-}
-
-function pageTitle() {
-  return {
-    dashboard: "Home",
-    meeting: "Meeting Room",
-    attendance: "Attendance Tracker",
-    transcripts: "Transcripts",
-    candidates: "Candidate Management",
-    whatsapp: "WhatsApp Messages",
-    guests: "Guest Management",
-    settings: "Settings",
-  }[state.route];
 }
 
 function routeView() {
@@ -353,8 +340,8 @@ function renderAdminDashboard() {
           <div class="list">
             <div class="card"><strong>Attendance reports</strong><div class="muted">Filter company-wide records from date to date.</div></div>
             <div class="card"><strong>Transcript sections</strong><div class="muted">Separate host/admin and candidate transcript views.</div></div>
-            <div class="card"><strong>WhatsApp campaigns</strong><div class="muted">Save immediate or scheduled candidate messages before API connection.</div></div>
-            <div class="card"><strong>Guest access</strong><div class="muted">Admins can add guests now; final credential policy can change later.</div></div>
+            <div class="card"><strong>WhatsApp campaigns</strong><div class="muted">Send immediate or scheduled candidate updates through the configured API.</div></div>
+            <div class="card"><strong>Guest access</strong><div class="muted">Assign temporary guests to a specific meeting.</div></div>
           </div>
         </section>
       </div>
@@ -559,8 +546,12 @@ function renderMeeting() {
       <section class="stage">
         <div class="video-grid">
           <div class="tile" id="selfTile">
-            ${state.cameraOn ? `<video id="localVideo" autoplay muted playsinline></video>` : `<div class="tile-initial">${initials(state.user.name)}</div>`}
-            <div class="tile-name">${state.user.name} | You</div>
+            ${state.screenSharing
+              ? `<video id="screenVideo" autoplay muted playsinline></video>`
+              : state.cameraOn
+                ? `<video id="localVideo" autoplay muted playsinline></video>`
+                : `<div class="tile-initial">${initials(state.user.name)}</div>`}
+            <div class="tile-name">${state.user.name} | ${state.screenSharing ? "Presenting" : "You"}</div>
           </div>
           ${people.filter(person => !person.isSelf).map(person => `
             <div class="tile">
@@ -572,7 +563,7 @@ function renderMeeting() {
         <div class="controls">
           <button class="control ${state.micOn ? "active" : ""}" id="micBtn" title="${state.micOn ? "Microphone on" : "Microphone off"}" aria-label="${state.micOn ? "Microphone on" : "Microphone off"}">${controlIcon(state.micOn ? "mic" : "micOff")}</button>
           <button class="control ${state.cameraOn ? "active" : ""}" id="cameraBtn" title="Camera" aria-label="Camera">${controlIcon("camera")}</button>
-          <button class="control" id="screenBtn" title="Screen share" aria-label="Screen share">${controlIcon("screen")}</button>
+          <button class="control ${state.screenSharing ? "active" : ""}" id="screenBtn" title="${state.screenSharing ? "Stop presenting" : "Share screen"}" aria-label="${state.screenSharing ? "Stop presenting" : "Share screen"}">${controlIcon("screen")}</button>
           ${canTrackAttendance ? `<button class="control track-control ${state.meetingPanel === "attendance" ? "active" : ""}" id="markAttendanceBtn" title="Track attendance">Track attendance</button>` : ""}
           <button class="control ${state.meetingPanel === "chat" ? "active" : ""}" id="chatBtn" title="Chat" aria-label="Chat">${controlIcon("chat")}</button>
           <button class="control ${state.meetingPanel === "participants" ? "active" : ""}" id="peopleBtn" title="Participants" aria-label="Participants">${controlIcon("people")}</button>
@@ -755,8 +746,6 @@ function renderAttendance() {
           <h2>Company attendance report</h2>
           <div class="actions">
             <button class="btn" id="exportCsvBtn">Export CSV</button>
-            <button class="btn" id="exportExcelBtn">Excel later</button>
-            <button class="btn" id="exportPdfBtn">PDF later</button>
           </div>
         </div>
         <div class="filters">
@@ -1073,11 +1062,10 @@ function renderWhatsApp() {
         <div>
           <div class="login-kicker">Candidate communication</div>
           <h1>Send WhatsApp updates to shortlisted candidates.</h1>
-          <p>Upload a CSV or paste candidate names and phone numbers, then send immediate campaigns when WhatsApp API is configured.</p>
+          <p>Choose saved candidates, upload a CSV, or enter recipients manually.</p>
         </div>
         <div class="actions">
           <span class="pill ok">Candidates only</span>
-          <span class="pill">${state.settings.whatsappApiStatus || "API pending"}</span>
         </div>
       </section>
       <div class="grid cols-2">
@@ -1123,10 +1111,16 @@ function renderWhatsApp() {
         <section class="panel">
           <div class="panel-header">
             <h2>Message details</h2>
-            <span class="pill warn">Template required</span>
           </div>
-          <div class="notice">
-            Immediate messages will be sent through WhatsApp Cloud API after Meta credentials and an approved template are added in the backend .env file. Until then, campaigns are saved as ready for API.
+          <div class="field">
+            <label>Attach meeting link</label>
+            <select id="whatsappMeetingCode">
+              <option value="">No meeting selected</option>
+              ${meetings.filter(meeting => meeting.code).map(meeting => `
+                <option value="${meeting.code}" ${state.whatsappMeetingCode === meeting.code ? "selected" : ""}>${meeting.title} | ${meeting.code}</option>
+              `).join("")}
+            </select>
+            ${state.whatsappMeetingCode ? `<div class="muted">${getMeetingJoinLink({ code: state.whatsappMeetingCode })}</div>` : ""}
           </div>
           <div class="field">
             <label>Message</label>
@@ -1146,9 +1140,8 @@ function renderWhatsApp() {
             </div>
           </div>
           <div class="actions" style="margin-top: 14px;">
-            <button class="btn primary" id="saveWhatsappCampaignBtn">Save campaign</button>
+            <button class="btn primary" id="saveWhatsappCampaignBtn">${isScheduled ? "Schedule message" : "Send message"}</button>
           </div>
-          <div class="muted" style="margin-top: 12px;">Use a Meta template with one body variable. The typed message is sent as that variable.</div>
         </section>
       </div>
       <section class="panel">
@@ -1165,7 +1158,7 @@ function renderWhatsApp() {
                 <div class="campaign-message">${campaign.message}</div>
                 ${renderWhatsappDeliveryResults(campaign)}
               </div>
-              <span class="pill ${campaign.status && campaign.status.includes("Sent") ? "ok" : ""}">${campaign.sendMode === "Scheduled" ? "Scheduled" : "API"}</span>
+              <span class="pill ${campaign.status && campaign.status.includes("Sent") ? "ok" : ""}">${campaign.sendMode === "Scheduled" ? "Scheduled" : "Sent"}</span>
             </div>
           `).join("") || `<div class="card">No WhatsApp campaigns saved yet.</div>`}
         </div>
@@ -1180,7 +1173,7 @@ function renderGuests() {
       <section class="panel">
         <div class="panel-header">
           <h2>Add guest</h2>
-          <span class="pill warn">Policy pending</span>
+          <span class="pill">Meeting assignment</span>
         </div>
         <div class="grid">
           <div class="field"><label>Name</label><input id="guestName" placeholder="Guest name" /></div>
@@ -1241,23 +1234,13 @@ function renderSettings() {
               <label>Target participant capacity</label>
               <input id="capacityLimit" type="number" min="1" max="1000" value="${state.settings.capacityLimit}" />
             </div>
-            <div class="field">
-              <label>Guest access method</label>
-              <select id="guestAccess">
-                ${["Invite link", "Email password", "OTP"].map(option => `<option ${state.settings.guestAccess === option ? "selected" : ""}>${option}</option>`).join("")}
-              </select>
-            </div>
+            <div class="field"><label>Guest access method</label><input value="Admin-assigned meeting link" disabled /></div>
           </div>
         </section>
         <section class="panel">
           <div class="panel-header"><h2>Reports and transcripts</h2></div>
           <div class="grid">
-            <div class="field">
-              <label>Transcript mode</label>
-              <select id="transcriptMode">
-                ${["Manual start", "Auto start for every meeting"].map(option => `<option ${state.settings.transcriptMode === option ? "selected" : ""}>${option}</option>`).join("")}
-              </select>
-            </div>
+            <div class="field"><label>Transcript mode</label><input value="Manual start" disabled /></div>
             <div class="field">
               <label>Candidate transcript access</label>
               <select id="candidateTranscriptAccess">
@@ -1265,12 +1248,7 @@ function renderSettings() {
                 <option value="no" ${!state.settings.candidateTranscriptAccess ? "selected" : ""}>Admin only</option>
               </select>
             </div>
-            <div class="field">
-              <label>Default attendance export</label>
-              <select id="exportFormat">
-                ${["CSV", "Excel", "PDF"].map(option => `<option ${state.settings.exportFormat === option ? "selected" : ""}>${option}</option>`).join("")}
-              </select>
-            </div>
+            <div class="field"><label>Attendance export</label><input value="CSV" disabled /></div>
           </div>
         </section>
       </div>
@@ -1287,7 +1265,7 @@ function renderSettings() {
           <button class="btn danger" data-clear-history="chat-messages">Clear meeting chat</button>
           <button class="btn danger" data-clear-history="whatsapp-campaigns">Clear WhatsApp history</button>
         </div>
-        <div class="muted" style="margin-top: 10px;">Use this only to remove old testing history before a clean demo. Guests are not deleted here.</div>
+        <div class="muted" style="margin-top: 10px;">These actions permanently remove the selected records. Guests are managed from the Guests page.</div>
       </section>
     </div>
   `;
@@ -1381,12 +1359,6 @@ async function loadBootstrapData() {
     chatMessages = data.chatMessages || chatMessages;
     whatsappCampaigns = data.whatsappCampaigns || whatsappCampaigns;
     state.settings = { ...state.settings, ...(data.settings || {}) };
-    try {
-      const whatsappStatus = await apiRequest("/api/whatsapp/status");
-      state.settings.whatsappApiStatus = whatsappStatus.status || state.settings.whatsappApiStatus;
-    } catch (error) {
-      state.settings.whatsappApiStatus = state.settings.whatsappApiStatus || "Not configured";
-    }
     state.backendOnline = true;
   } catch (error) {
     state.backendOnline = false;
@@ -1429,6 +1401,7 @@ async function apiRequest(path, options = {}) {
   const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
+      ...(state.authToken ? { Authorization: `Bearer ${state.authToken}` } : {}),
       ...(options.headers || {}),
     },
     ...options,
@@ -1443,7 +1416,7 @@ async function apiRequest(path, options = {}) {
 }
 
 function bindLogin() {
-  let selectedRole = "Admin";
+  let selectedRole = state.pendingJoinCode ? "Candidate" : "Admin";
   const email = document.querySelector("#email");
   const name = document.querySelector("#name");
   const password = document.querySelector("#password");
@@ -1485,7 +1458,7 @@ function bindLogin() {
   loginBtn.addEventListener("click", async () => {
     if (selectedRole === "Admin") {
       try {
-        state.user = await apiRequest("/api/auth/admin", {
+        const authentication = await apiRequest("/api/auth/admin", {
           method: "POST",
           body: JSON.stringify({
             name: name.value.trim() || "Company Admin",
@@ -1493,6 +1466,8 @@ function bindLogin() {
             password: password.value,
           }),
         });
+        state.authToken = authentication.token;
+        state.user = withoutAuthToken(authentication);
         state.backendOnline = true;
       } catch (error) {
         state.backendOnline = false;
@@ -1501,13 +1476,15 @@ function bindLogin() {
       }
     } else if (selectedRole === "Guest") {
       try {
-        state.user = await apiRequest("/api/auth/guest", {
+        const authentication = await apiRequest("/api/auth/guest", {
           method: "POST",
           body: JSON.stringify({
             name: name.value.trim() || "Guest User",
             email: email.value.trim(),
           }),
         });
+        state.authToken = authentication.token;
+        state.user = withoutAuthToken(authentication);
         state.backendOnline = true;
       } catch (error) {
         state.backendOnline = false;
@@ -1522,6 +1499,10 @@ function bindLogin() {
       };
     }
     await loadBootstrapData();
+    if (state.pendingJoinCode) {
+      await joinMeetingWithCode(state.pendingJoinCode);
+      return;
+    }
     render();
   });
 
@@ -1539,7 +1520,7 @@ function bindLogin() {
           Continue with Google
         </button>
       `;
-      googleLoginStatus.textContent = "Add your Google OAuth Client ID in app-config.js to activate this button.";
+      googleLoginStatus.textContent = "Google sign-in is currently unavailable. Contact the administrator.";
       return;
     }
 
@@ -1550,7 +1531,7 @@ function bindLogin() {
           Continue with Google
         </button>
       `;
-      googleLoginStatus.textContent = "Google sign-in is loading. Refresh once if the button does not appear.";
+      googleLoginStatus.textContent = "Google sign-in is temporarily unavailable. Refresh the page and try again.";
       return;
     }
 
@@ -1587,13 +1568,17 @@ function bindInvitationPage() {
 }
 
 async function handleGoogleCredential(response) {
-  const profile = parseJwt(response.credential);
-  state.user = {
-    name: profile.name || profile.given_name || "Candidate User",
-    email: profile.email || "candidate@gmail.com",
-    role: "Candidate",
-    picture: profile.picture || "",
-  };
+  try {
+    const authentication = await apiRequest("/api/auth/google", {
+      method: "POST",
+      body: JSON.stringify({ credential: response.credential }),
+    });
+    state.authToken = authentication.token;
+    state.user = withoutAuthToken(authentication);
+  } catch (error) {
+    alert(error.message || "Google sign-in could not be verified.");
+    return;
+  }
   await loadBootstrapData();
   if (state.pendingJoinCode) {
     await joinMeetingWithCode(state.pendingJoinCode);
@@ -1602,20 +1587,9 @@ async function handleGoogleCredential(response) {
   render();
 }
 
-function parseJwt(token) {
-  try {
-    const payload = token.split(".")[1];
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const json = decodeURIComponent(
-      atob(normalized)
-        .split("")
-        .map(char => `%${`00${char.charCodeAt(0).toString(16)}`.slice(-2)}`)
-        .join("")
-    );
-    return JSON.parse(json);
-  } catch (error) {
-    return {};
-  }
+function withoutAuthToken(authentication) {
+  const { token, ...user } = authentication;
+  return user;
 }
 
 async function navigateTo(route, options = {}) {
@@ -1641,17 +1615,16 @@ function bindShell() {
     await navigateTo("dashboard");
   });
 
-  document.querySelector("#logoutBtn")?.addEventListener("click", () => {
-    stopCamera();
+  document.querySelector("#logoutBtn")?.addEventListener("click", async () => {
+    stopAllMedia();
+    await apiRequest("/api/auth/logout", { method: "POST" }).catch(() => {});
+    state.authToken = "";
     state.user = null;
     state.route = "dashboard";
     render();
   });
 
-  document.querySelector("#micBtn")?.addEventListener("click", () => {
-    state.micOn = !state.micOn;
-    render();
-  });
+  document.querySelector("#micBtn")?.addEventListener("click", toggleMicrophone);
 
   document.querySelector("#cameraBtn")?.addEventListener("click", toggleCamera);
   document.querySelector("#screenBtn")?.addEventListener("click", shareScreen);
@@ -1735,11 +1708,42 @@ function bindShell() {
     state.whatsappSendMode = event.target.value;
     render();
   });
+  document.querySelector("#whatsappMeetingCode")?.addEventListener("change", event => {
+    captureWhatsappDraft();
+    state.whatsappMeetingCode = event.target.value;
+    render();
+  });
   document.querySelector("#previewWhatsappRecipientsBtn")?.addEventListener("click", previewWhatsappRecipients);
   document.querySelector("#clearWhatsappRecipientsBtn")?.addEventListener("click", clearWhatsappRecipients);
   document.querySelector("#saveWhatsappCampaignBtn")?.addEventListener("click", saveWhatsappCampaign);
 
   attachLocalVideo();
+  attachScreenVideo();
+}
+
+async function toggleMicrophone() {
+  if (state.micOn) {
+    stopMicrophone();
+    render();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    alert("Microphone access is not available in this browser.");
+    return;
+  }
+  try {
+    state.audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    state.micOn = true;
+    render();
+  } catch (error) {
+    alert("Microphone permission was not available in this browser session.");
+  }
+}
+
+function stopMicrophone() {
+  state.audioStream?.getTracks().forEach(track => track.stop());
+  state.audioStream = null;
+  state.micOn = false;
 }
 
 async function toggleCamera() {
@@ -1764,6 +1768,13 @@ function attachLocalVideo() {
   }
 }
 
+function attachScreenVideo() {
+  const video = document.querySelector("#screenVideo");
+  if (video && state.screenStream) {
+    video.srcObject = state.screenStream;
+  }
+}
+
 function stopCamera() {
   if (state.stream) {
     state.stream.getTracks().forEach(track => track.stop());
@@ -1773,16 +1784,38 @@ function stopCamera() {
 }
 
 async function shareScreen() {
+  if (state.screenSharing) {
+    stopScreenShare();
+    render();
+    return;
+  }
   if (!navigator.mediaDevices?.getDisplayMedia) {
     alert("Screen sharing is not available in this browser.");
     return;
   }
   try {
-    const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    screen.getTracks().forEach(track => track.addEventListener("ended", () => track.stop()));
+    state.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    state.screenSharing = true;
+    state.screenStream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      stopScreenShare();
+      render();
+    }, { once: true });
+    render();
   } catch (error) {
     alert("Screen sharing was cancelled or blocked.");
   }
+}
+
+function stopScreenShare() {
+  state.screenStream?.getTracks().forEach(track => track.stop());
+  state.screenStream = null;
+  state.screenSharing = false;
+}
+
+function stopAllMedia() {
+  stopMicrophone();
+  stopCamera();
+  stopScreenShare();
 }
 
 function exportAttendanceCsv() {
@@ -1962,7 +1995,7 @@ function extractMeetingCode(value) {
 }
 
 async function endMeeting() {
-  stopCamera();
+  stopAllMedia();
   if (state.transcriptActive) {
     state.transcriptActive = false;
     stopSpeechTranscript();
@@ -2256,6 +2289,7 @@ function captureWhatsappDraft() {
   const manual = document.querySelector("#whatsappManualRecipients");
   const message = document.querySelector("#whatsappMessage");
   const scheduledAt = document.querySelector("#whatsappScheduledAt");
+  const meetingCode = document.querySelector("#whatsappMeetingCode");
   if (manual) {
     state.whatsappDraftManual = manual.value;
   }
@@ -2264,6 +2298,9 @@ function captureWhatsappDraft() {
   }
   if (scheduledAt) {
     state.whatsappDraftScheduledAt = scheduledAt.value;
+  }
+  if (meetingCode) {
+    state.whatsappMeetingCode = meetingCode.value;
   }
 }
 
@@ -2303,10 +2340,12 @@ function renderWhatsappDeliveryResults(campaign) {
   const sent = campaign.deliveryResults.filter(result => result.status === "Sent").length;
   const failed = campaign.deliveryResults.filter(result => result.status === "Failed").length;
   const pending = campaign.deliveryResults.length - sent - failed;
+  const firstFailure = campaign.deliveryResults.find(result => result.status === "Failed" && result.detail);
   return `
     <div class="muted" style="margin-top: 8px;">
       Delivery: ${sent} sent${failed ? `, ${failed} failed` : ""}${pending ? `, ${pending} pending` : ""}
     </div>
+    ${firstFailure ? `<div class="muted">Reason: ${firstFailure.detail}</div>` : ""}
   `;
 }
 
@@ -2354,6 +2393,7 @@ async function saveWhatsappCampaign() {
   const message = state.whatsappDraftMessage.trim();
   const sendMode = state.whatsappSendMode;
   const scheduleValue = state.whatsappDraftScheduledAt;
+  const meetingCode = state.whatsappMeetingCode;
 
   if (!whatsappDraftRecipients.length) {
     alert("Add candidate names and WhatsApp numbers first.");
@@ -2371,9 +2411,10 @@ async function saveWhatsappCampaign() {
   const campaign = {
     message,
     recipients: whatsappDraftRecipients,
+    meetingCode,
     sendMode,
     scheduledAt: scheduleValue ? new Date(scheduleValue).toLocaleString() : "",
-    status: sendMode === "Scheduled" ? "Scheduled locally" : "Saved locally",
+    status: sendMode === "Scheduled" ? "Scheduled" : "Sending",
     createdAt: new Date().toLocaleString(),
   };
 
@@ -2385,18 +2426,22 @@ async function saveWhatsappCampaign() {
     whatsappCampaigns.unshift(saved);
     state.backendOnline = true;
     campaign.status = saved.status || campaign.status;
+    campaign.deliveryResults = saved.deliveryResults || [];
   } catch (error) {
-    whatsappCampaigns.unshift({ ...campaign, id: `WA-${Date.now()}` });
     state.backendOnline = false;
-    campaign.status = "Saved locally because backend did not respond";
+    alert(error.message || "The message could not be sent. Please try again.");
+    return;
   }
 
   whatsappDraftRecipients = [];
   state.whatsappDraftManual = "";
   state.whatsappDraftMessage = "";
   state.whatsappDraftScheduledAt = "";
+  state.whatsappMeetingCode = "";
   state.whatsappSendMode = "Immediate";
-  alert(sendMode === "Scheduled" ? "WhatsApp campaign scheduled locally." : campaign.status);
+  const failedDelivery = campaign.deliveryResults?.find(result => result.status === "Failed" && result.detail);
+  const immediateStatus = failedDelivery ? `${campaign.status}: ${failedDelivery.detail}` : campaign.status;
+  alert(sendMode === "Scheduled" ? "Message scheduled." : immediateStatus);
   render();
 }
 
@@ -2470,13 +2515,7 @@ async function updateCandidateConsent(decision) {
 
 async function saveSettings() {
   state.settings.capacityLimit = Number(document.querySelector("#capacityLimit")?.value) || 1000;
-  state.settings.guestAccess = document.querySelector("#guestAccess")?.value || "Invite link";
-  state.settings.transcriptMode = document.querySelector("#transcriptMode")?.value || "Manual start";
   state.settings.candidateTranscriptAccess = document.querySelector("#candidateTranscriptAccess")?.value === "yes";
-  state.settings.exportFormat = document.querySelector("#exportFormat")?.value || "CSV";
-  state.settings.databaseMode = state.settings.databaseMode || "Local JSON database";
-  state.settings.deploymentTarget = state.settings.deploymentTarget || "Not deployed";
-  state.settings.whatsappApiStatus = state.settings.whatsappApiStatus || "Not configured";
   try {
     await apiRequest("/api/settings", {
       method: "PUT",
@@ -2486,7 +2525,7 @@ async function saveSettings() {
     alert("Settings saved.");
   } catch (error) {
     state.backendOnline = false;
-    alert("Settings saved locally, but the backend did not respond.");
+    alert("Settings could not be saved. Please try again.");
   }
   render();
 }

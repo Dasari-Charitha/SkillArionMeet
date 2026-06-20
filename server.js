@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const dns = require("dns");
 
 loadEnvFile();
 
@@ -13,14 +14,25 @@ try {
 }
 
 const port = Number(process.env.PORT) || 5173;
+const host = process.env.HOST || "127.0.0.1";
+const isProduction = process.env.NODE_ENV === "production";
 const root = __dirname;
-const dataDir = path.join(root, "data");
+const dataDir = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(root, "data");
 const dbPath = path.join(dataDir, "db.json");
-const mongoUri = process.env.MONGODB_URI || "";
+const configuredMongoUri = process.env.MONGODB_URI || "";
+const mongoUri = isPlaceholderMongoUri(configuredMongoUri) ? "" : configuredMongoUri;
 const mongoDbName = process.env.MONGODB_DB || "skillarion_meet";
+const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
+const mongoDnsServers = String(process.env.MONGODB_DNS_SERVERS || "")
+  .split(",")
+  .map(server => server.trim())
+  .filter(Boolean);
 const adminEmail = (process.env.ADMIN_EMAIL || "admin@SkillArionDevelopment.in").toLowerCase();
 const adminPassword = process.env.ADMIN_PASSWORD || "SkillArionAdmin123";
-const whatsappGraphVersion = process.env.WHATSAPP_GRAPH_VERSION || "v20.0";
+const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
+const whatsappGraphVersion = process.env.WHATSAPP_GRAPH_VERSION || "v25.0";
 const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const whatsappAccessToken = process.env.WHATSAPP_ACCESS_TOKEN || "";
 const whatsappTemplateName = process.env.WHATSAPP_TEMPLATE_NAME || "";
@@ -28,6 +40,14 @@ const whatsappTemplateLanguage = process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en_U
 const collectionNames = ["meetings", "guests", "candidates", "whatsappCampaigns", "attendance", "transcripts", "chatMessages"];
 let mongoClient = null;
 let mongoDb = null;
+const sessions = new Map();
+const sessionTtlMs = 12 * 60 * 60 * 1000;
+
+if (mongoDnsServers.length) {
+  dns.setServers(mongoDnsServers);
+}
+
+validateRuntimeConfig();
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -43,48 +63,16 @@ const contentTypes = {
 const seedDb = {
   settings: {
     companyDomain: "SkillArionDevelopment.in",
-    meetingTimeLimit: "No fixed time limit",
     capacityLimit: 1000,
-    guestAccess: "Invite link",
-    transcriptMode: "Manual start",
     candidateTranscriptAccess: true,
-    exportFormat: "CSV",
-    databaseMode: "Local JSON database",
-    deploymentTarget: "Not deployed",
-    whatsappApiStatus: "Not configured",
   },
   meetings: [],
-  guests: [
-    { name: "Rahul Iyer", email: "rahul@gmail.com", status: "Invited", meeting: "Training Batch Orientation" },
-    { name: "Sana Ali", email: "sana@example.com", status: "Active", meeting: "Frontend Hiring Round" },
-  ],
-  candidates: [
-    { name: "Aarav Mehta", email: "aarav@gmail.com", phone: "919876543210", program: "Internship", status: "Shortlisted" },
-    { name: "Diya Shah", email: "diya@gmail.com", phone: "919812345678", program: "Internship", status: "Interview pending" },
-    { name: "Meera Kapoor", email: "meera@gmail.com", phone: "919998887776", program: "Training", status: "Active" },
-  ],
-  whatsappCampaigns: [
-    {
-      id: "WA-1001",
-      message: "Congratulations, you have been shortlisted for the internship round. Please check your meeting link and join on time.",
-      recipients: [
-        { name: "Aarav Mehta", phone: "919876543210" },
-        { name: "Diya Shah", phone: "919812345678" },
-      ],
-      sendMode: "Immediate",
-      scheduledAt: "",
-      status: "Saved locally",
-      createdAt: "2026-06-03 10:00",
-    },
-  ],
+  guests: [],
+  candidates: [],
+  whatsappCampaigns: [],
   attendance: [],
   chatMessages: [],
-  transcripts: [
-    { time: "10:04", speaker: "Host", section: "Admin", text: "Welcome everyone. We will start with the project overview and then move to questions." },
-    { time: "10:08", speaker: "Aarav Mehta", section: "Candidate", text: "I have experience with React, REST APIs, and dashboard workflows." },
-    { time: "10:12", speaker: "Host", section: "Admin", text: "Please explain how you would handle attendance tracking for reconnecting users." },
-    { time: "10:16", speaker: "Diya Shah", section: "Candidate", text: "I would store each join and leave session separately and calculate total duration from all sessions." },
-  ],
+  transcripts: [],
 };
 
 ensureDb();
@@ -104,9 +92,29 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`SkillArionMeet running at http://127.0.0.1:${port}`);
+server.on("error", error => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`Port ${port} is already in use. Stop the existing server or set a different PORT.`);
+    process.exit(1);
+  }
+  throw error;
 });
+
+server.listen(port, host, () => {
+  const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  console.log(`SkillArionMeet running at http://${displayHost}:${port}`);
+});
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    server.close(async () => {
+      if (mongoClient) {
+        await mongoClient.close().catch(() => {});
+      }
+      process.exit(0);
+    });
+  });
+}
 
 async function handleApi(request, response, requestedUrl) {
   const db = await readDb();
@@ -121,24 +129,20 @@ async function handleApi(request, response, requestedUrl) {
     return;
   }
 
-  if (method === "GET" && pathname === "/api/bootstrap") {
-    sendJson(response, 200, db);
-    return;
-  }
-
   if (method === "POST" && pathname === "/api/auth/admin") {
     const body = await readJsonBody(request);
     const email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
-    if (email !== adminEmail || password !== adminPassword) {
+    if (email !== adminEmail || !secureEqual(password, adminPassword)) {
       sendJson(response, 401, { error: "Invalid admin email or password." });
       return;
     }
-    sendJson(response, 200, {
+    const user = {
       name: body.name || "Company Admin",
       email: adminEmail,
       role: "Admin",
-    });
+    };
+    sendJson(response, 200, { ...user, token: createSession(user) });
     return;
   }
 
@@ -150,23 +154,80 @@ async function handleApi(request, response, requestedUrl) {
       sendJson(response, 401, { error: "Guest access not found. Ask Admin to add this guest first." });
       return;
     }
-    sendJson(response, 200, {
+    const user = {
       name: guest.name || body.name || "Guest User",
       email: guest.email,
       role: "Guest",
       status: guest.status || "Invited",
       meeting: guest.meeting || "General access",
+    };
+    sendJson(response, 200, { ...user, token: createSession(user) });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/google") {
+    const body = await readJsonBody(request);
+    let profile;
+    try {
+      profile = await verifyGoogleCredential(body.credential);
+    } catch (error) {
+      sendJson(response, 401, { error: error.message || "Google sign-in could not be verified." });
+      return;
+    }
+    const candidate = (db.candidates || []).find(item => {
+      return String(item.email || "").trim().toLowerCase() === profile.email;
     });
+    if (!candidate) {
+      sendJson(response, 403, { error: "Admin has not added this Google account to the candidate list." });
+      return;
+    }
+    if ((candidate.consentStatus || candidate.status) !== "Accepted") {
+      sendJson(response, 403, { error: "Accept the candidate invitation before signing in." });
+      return;
+    }
+    const user = {
+      name: profile.name || candidate.name || "Candidate User",
+      email: profile.email,
+      role: "Candidate",
+      picture: profile.picture || "",
+    };
+    sendJson(response, 200, { ...user, token: createSession(user) });
+    return;
+  }
+
+  const isPublicInvitation = /^\/api\/candidate-invitations\/[^/]+$/.test(pathname)
+    && ["GET", "PUT"].includes(method);
+  const session = isPublicInvitation ? null : getSession(request);
+  if (!isPublicInvitation && !session) {
+    sendJson(response, 401, { error: "Your session is missing or expired. Please sign in again." });
+    return;
+  }
+  if (session && isAdminOnlyRoute(method, pathname) && session.user.role !== "Admin") {
+    sendJson(response, 403, { error: "Admin access is required." });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/logout") {
+    sessions.delete(session.token);
+    sendJson(response, 200, { ok: true });
+    return;
+  }
+
+  if (method === "GET" && pathname === "/api/bootstrap") {
+    sendJson(response, 200, buildBootstrapForUser(db, session.user));
     return;
   }
 
   if (method === "GET" && pathname === "/api/meetings") {
-    sendJson(response, 200, db.meetings);
+    const visibleMeetings = session.user.role === "Admin"
+      ? db.meetings
+      : (db.meetings || []).filter(meeting => !getMeetingAccessError(db, meeting, session.user));
+    sendJson(response, 200, visibleMeetings);
     return;
   }
 
   if (method === "POST" && pathname === "/api/meetings/join") {
-    const body = await readJsonBody(request);
+    const body = withSessionIdentity(await readJsonBody(request), session.user);
     const meeting = findMeeting(db, body.code || body.link || body.meeting);
     if (!meeting) {
       sendJson(response, 404, { error: "Meeting not found" });
@@ -190,6 +251,13 @@ async function handleApi(request, response, requestedUrl) {
       sendJson(response, 404, { error: "Meeting not found" });
       return;
     }
+    if (session.user.role !== "Admin") {
+      const accessError = getMeetingAccessError(db, meeting, session.user);
+      if (accessError) {
+        sendJson(response, 403, { error: accessError });
+        return;
+      }
+    }
     sendJson(response, 200, meeting);
     return;
   }
@@ -201,7 +269,7 @@ async function handleApi(request, response, requestedUrl) {
       sendJson(response, 404, { error: "Meeting not found" });
       return;
     }
-    const body = await readJsonBody(request);
+    const body = withSessionIdentity(await readJsonBody(request), session.user);
     const accessError = getMeetingAccessError(db, meeting, body);
     if (accessError) {
       sendJson(response, 403, { error: accessError });
@@ -220,7 +288,7 @@ async function handleApi(request, response, requestedUrl) {
       sendJson(response, 404, { error: "Meeting not found" });
       return;
     }
-    const body = await readJsonBody(request);
+    const body = withSessionIdentity(await readJsonBody(request), session.user);
     const leftAt = new Date();
     const attendance = findOpenAttendance(db, meeting, body);
     if (!attendance) {
@@ -235,6 +303,7 @@ async function handleApi(request, response, requestedUrl) {
     attendance.attendedSeconds = diffSeconds(joinedAt, leftAt);
     attendance.meetingElapsedSeconds = getMeetingElapsedSeconds(meeting, leftAt);
     attendance.percent = calculateAttendancePercent(attendance.attendedSeconds, attendance.meetingElapsedSeconds);
+    meeting.participants = countLiveMeetingParticipants(db, meeting);
     await writeDb(db);
     sendJson(response, 200, { meeting, attendance });
     return;
@@ -252,7 +321,7 @@ async function handleApi(request, response, requestedUrl) {
       id: body.id || code,
       code,
       title: body.title || "Untitled meeting",
-      host: body.host || "Company Admin",
+      host: session.user.name || "Company Admin",
       start: body.start || new Date().toISOString(),
       createdAt: new Date().toISOString(),
       duration: body.duration || "0m",
@@ -345,7 +414,7 @@ async function handleApi(request, response, requestedUrl) {
   const candidateConsentMatch = pathname.match(/^\/api\/candidates\/(.+)\/consent$/);
   if (method === "PUT" && candidateConsentMatch) {
     const email = decodeURIComponent(candidateConsentMatch[1]).trim().toLowerCase();
-    const body = await readJsonBody(request);
+    const body = withSessionIdentity(await readJsonBody(request), session.user);
     const decision = String(body.decision || "").toLowerCase();
     if (!["accepted", "declined"].includes(decision)) {
       sendJson(response, 400, { error: "Consent decision must be accepted or declined." });
@@ -420,13 +489,25 @@ async function handleApi(request, response, requestedUrl) {
       sendJson(response, 400, { error: "Message is required." });
       return;
     }
+    const meetingCode = normalizeMeetingCode(body.meetingCode || "");
+    const meeting = meetingCode ? findMeeting(db, meetingCode) : null;
+    if (meetingCode && !meeting) {
+      sendJson(response, 404, { error: "The selected meeting was not found." });
+      return;
+    }
+    const meetingLink = meeting ? createPublicMeetingLink(request, meeting.code) : "";
+    const campaignMessage = meetingLink
+      ? `${String(body.message || "").trim()}\n\nJoin meeting: ${meetingLink}`
+      : String(body.message || "").trim();
     const campaign = {
       id: `WA-${Date.now()}`,
-      message: String(body.message || "").trim(),
+      message: campaignMessage,
+      meetingCode: meeting?.code || "",
+      meetingLink,
       recipients,
       sendMode: body.sendMode === "Scheduled" ? "Scheduled" : "Immediate",
       scheduledAt: body.sendMode === "Scheduled" ? String(body.scheduledAt || "") : "",
-      status: body.sendMode === "Scheduled" ? "Scheduled locally" : "Ready for WhatsApp API",
+      status: body.sendMode === "Scheduled" ? "Scheduled" : "Sending",
       createdAt: body.createdAt || new Date().toLocaleString(),
       deliveryResults: [],
     };
@@ -438,12 +519,12 @@ async function handleApi(request, response, requestedUrl) {
         campaign.deliveryResults = delivery.results;
         campaign.status = delivery.status;
       } else {
-        campaign.status = "Ready for WhatsApp API";
+        campaign.status = "Messaging unavailable";
         campaign.deliveryResults = recipients.map(person => ({
           name: person.name,
           phone: person.phone,
           status: "Not sent",
-          detail: "WhatsApp API credentials are not configured on the server.",
+          detail: "The messaging service is currently unavailable.",
         }));
       }
     }
@@ -499,7 +580,15 @@ async function handleApi(request, response, requestedUrl) {
   if (method === "GET" && pathname === "/api/chat-messages") {
     const meetingCode = normalizeMeetingCode(requestedUrl.searchParams.get("meetingCode") || "");
     const messages = (db.chatMessages || []).filter(message => {
-      return !meetingCode || String(message.meetingCode || "").toUpperCase() === meetingCode;
+      const messageCode = normalizeMeetingCode(message.meetingCode || "");
+      if (meetingCode && messageCode !== meetingCode) {
+        return false;
+      }
+      if (session.user.role === "Admin") {
+        return true;
+      }
+      const meeting = findMeeting(db, messageCode);
+      return Boolean(meeting && !getMeetingAccessError(db, meeting, session.user));
     });
     sendJson(response, 200, messages);
     return;
@@ -516,9 +605,9 @@ async function handleApi(request, response, requestedUrl) {
       id: `CHAT-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
       meetingCode,
       meetingTitle: body.meetingTitle || "",
-      sender: body.sender || "Meeting user",
-      email: body.email || "",
-      role: body.role || "Candidate",
+      sender: session.user.name || "Meeting user",
+      email: session.user.email || "",
+      role: session.user.role,
       text: String(body.text || "").trim(),
       time: body.time || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       createdAt: body.createdAt || new Date().toISOString(),
@@ -535,7 +624,15 @@ async function handleApi(request, response, requestedUrl) {
   }
 
   if (method === "GET" && pathname === "/api/transcripts") {
-    sendJson(response, 200, db.transcripts);
+    const lines = session.user.role === "Admin"
+      ? db.transcripts
+      : session.user.role === "Candidate"
+        ? (db.transcripts || []).filter(line => {
+          return String(line.email || "").trim().toLowerCase() === session.user.email
+            || String(line.speaker || "").trim().toLowerCase() === String(session.user.name || "").trim().toLowerCase();
+        })
+        : [];
+    sendJson(response, 200, lines);
     return;
   }
 
@@ -543,8 +640,11 @@ async function handleApi(request, response, requestedUrl) {
     const body = await readJsonBody(request);
     const line = {
       time: body.time || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      speaker: body.speaker || "Unknown",
-      section: body.section || "Admin",
+      speaker: session.user.name || "Unknown",
+      email: session.user.email || "",
+      section: session.user.role,
+      meetingCode: normalizeMeetingCode(body.meetingCode || ""),
+      meetingTitle: body.meetingTitle || "",
       text: body.text || "",
     };
     db.transcripts.unshift(line);
@@ -697,6 +797,108 @@ async function seedMongoIfEmpty(database) {
   }
 }
 
+function createSession(user) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  sessions.set(token, {
+    token,
+    user: { ...user },
+    expiresAt: Date.now() + sessionTtlMs,
+  });
+  return token;
+}
+
+function getSession(request) {
+  const authorization = String(request.headers.authorization || "");
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  const session = token ? sessions.get(token) : null;
+  if (!session) {
+    return null;
+  }
+  if (session.expiresAt <= Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  session.expiresAt = Date.now() + sessionTtlMs;
+  return session;
+}
+
+function secureEqual(received, expected) {
+  const left = Buffer.from(String(received || ""));
+  const right = Buffer.from(String(expected || ""));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+async function verifyGoogleCredential(credential) {
+  if (!googleClientId) {
+    throw new Error("GOOGLE_CLIENT_ID is not configured on the server.");
+  }
+  if (!credential) {
+    throw new Error("Google credential is required.");
+  }
+  const endpoint = `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`;
+  const verificationResponse = await fetch(endpoint);
+  const profile = await verificationResponse.json().catch(() => ({}));
+  if (!verificationResponse.ok || profile.aud !== googleClientId || profile.email_verified !== "true") {
+    throw new Error("Google sign-in could not be verified.");
+  }
+  return {
+    name: profile.name || "",
+    email: String(profile.email || "").trim().toLowerCase(),
+    picture: profile.picture || "",
+  };
+}
+
+function isAdminOnlyRoute(method, pathname) {
+  if (method === "POST" && pathname === "/api/meetings") return true;
+  if (pathname === "/api/guests" || pathname === "/api/candidates") return true;
+  if (/^\/api\/candidates\/.+\/consent$/.test(pathname)) return true;
+  if (pathname.startsWith("/api/whatsapp")) return true;
+  if (pathname === "/api/attendance") return true;
+  if (method === "PUT" && pathname === "/api/settings") return true;
+  if (method === "DELETE") return true;
+  return false;
+}
+
+function withSessionIdentity(body, user) {
+  return {
+    ...body,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+  };
+}
+
+function buildBootstrapForUser(db, user) {
+  if (user.role === "Admin") {
+    return db;
+  }
+
+  const email = String(user.email || "").trim().toLowerCase();
+  const identity = { name: user.name, email, role: user.role };
+  const meetings = (db.meetings || []).filter(meeting => !getMeetingAccessError(db, meeting, identity));
+  const meetingCodes = new Set(meetings.map(meeting => normalizeMeetingCode(meeting.code || meeting.id)));
+  const attendance = (db.attendance || []).filter(row => String(row.email || "").trim().toLowerCase() === email);
+  const transcripts = user.role === "Candidate" && db.settings?.candidateTranscriptAccess !== false
+    ? (db.transcripts || []).filter(line => {
+      return String(line.email || "").trim().toLowerCase() === email
+        || String(line.speaker || "").trim().toLowerCase() === String(user.name || "").trim().toLowerCase();
+    })
+    : [];
+
+  return {
+    settings: db.settings || {},
+    meetings,
+    guests: user.role === "Guest" ? findGuestRecordsByEmail(db, email) : [],
+    candidates: user.role === "Candidate"
+      ? (db.candidates || []).filter(candidate => String(candidate.email || "").trim().toLowerCase() === email)
+      : [],
+    whatsappCampaigns: [],
+    attendance,
+    transcripts,
+    chatMessages: (db.chatMessages || []).filter(message => meetingCodes.has(normalizeMeetingCode(message.meetingCode))),
+  };
+}
+
 function findMeeting(db, codeOrId) {
   const normalized = normalizeMeetingCode(codeOrId);
   return db.meetings.find(meeting => {
@@ -713,6 +915,11 @@ function createMeetingCode(db) {
 }
 
 function joinMeeting(db, meeting, body) {
+  const existingAttendance = findOpenAttendance(db, meeting, body);
+  if (existingAttendance) {
+    return { meeting, attendance: existingAttendance };
+  }
+
   const joined = new Date();
   const attendance = {
     id: `ATT-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
@@ -731,9 +938,9 @@ function joinMeeting(db, meeting, body) {
     meetingElapsedSeconds: getMeetingElapsedSeconds(meeting, joined),
     percent: 0,
   };
-  meeting.participants = Number(meeting.participants || 0) + 1;
-  meeting.status = "Live";
   db.attendance.unshift(attendance);
+  meeting.participants = countLiveMeetingParticipants(db, meeting);
+  meeting.status = "Live";
   return { meeting, attendance };
 }
 
@@ -742,6 +949,12 @@ function getMeetingAccessError(db, meeting, body) {
   const role = String(body.role || "").toLowerCase();
   const email = String(body.email || "").trim().toLowerCase();
   const allowedEmails = normalizeEmailList(meeting.allowedEmails);
+  const existingAttendance = findOpenAttendance(db, meeting, body);
+  const capacity = Math.max(1, Number(db.settings?.capacityLimit) || 1000);
+
+  if (!existingAttendance && countLiveMeetingParticipants(db, meeting) >= capacity) {
+    return `This meeting has reached its participant limit of ${capacity}.`;
+  }
 
   if (accessMode === "candidates" && role !== "candidate") {
     return "You are not allowed to join this meeting. This meeting is for candidates only.";
@@ -776,6 +989,27 @@ function getMeetingAccessError(db, meeting, body) {
   }
 
   return "";
+}
+
+function countLiveMeetingParticipants(db, meeting) {
+  const identities = new Set();
+  (db.attendance || []).forEach(row => {
+    if (row.meetingCode !== meeting.code || row.left !== "In meeting") {
+      return;
+    }
+    const identity = String(row.email || row.name || row.id || "").trim().toLowerCase();
+    if (identity) {
+      identities.add(identity);
+    }
+  });
+  return identities.size;
+}
+
+function createPublicMeetingLink(request, meetingCode) {
+  const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || (request.socket.encrypted ? "https" : "http");
+  const baseUrl = publicBaseUrl || `${protocol}://${request.headers.host}`;
+  return `${baseUrl}/?meet=${encodeURIComponent(meetingCode)}`;
 }
 
 function findGuestByEmail(db, email) {
@@ -908,25 +1142,30 @@ async function sendWhatsappCampaign(campaign) {
 
 async function sendWhatsappTemplateMessage(recipient, message) {
   const endpoint = `https://graph.facebook.com/${whatsappGraphVersion}/${whatsappPhoneNumberId}/messages`;
+  const template = {
+    name: whatsappTemplateName,
+    language: { code: whatsappTemplateLanguage },
+  };
+
+  // Meta's built-in test template has no variables. The production candidate
+  // update template receives the candidate name and the admin's message.
+  if (whatsappTemplateName !== "hello_world") {
+    template.components = [
+      {
+        type: "body",
+        parameters: [
+          { type: "text", text: recipient.name || "Candidate" },
+          { type: "text", text: message },
+        ],
+      },
+    ];
+  }
+
   const payload = {
     messaging_product: "whatsapp",
     to: recipient.phone,
     type: "template",
-    template: {
-      name: whatsappTemplateName,
-      language: { code: whatsappTemplateLanguage },
-      components: [
-        {
-          type: "body",
-          parameters: [
-            {
-              type: "text",
-              text: message,
-            },
-          ],
-        },
-      ],
-    },
+    template,
   };
 
   try {
@@ -999,14 +1238,19 @@ function normalizeMeetingCode(code) {
 }
 
 function findOpenAttendance(db, meeting, body) {
+  const email = String(body.email || "").toLowerCase();
   if (body.attendanceId) {
-    const byId = db.attendance.find(row => row.id === body.attendanceId);
+    const byId = db.attendance.find(row => {
+      return row.id === body.attendanceId
+        && row.meetingCode === meeting.code
+        && String(row.email || "").toLowerCase() === email
+        && row.left === "In meeting";
+    });
     if (byId) {
       return byId;
     }
   }
 
-  const email = String(body.email || "").toLowerCase();
   return db.attendance.find(row => {
     return row.meetingCode === meeting.code && String(row.email || "").toLowerCase() === email && row.left === "In meeting";
   });
@@ -1108,4 +1352,37 @@ function loadEnvFile() {
       process.env[key] = value;
     }
   });
+}
+
+function validateRuntimeConfig() {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PORT must be a number between 1 and 65535.");
+  }
+
+  if (!isProduction) {
+    return;
+  }
+
+  const errors = [];
+  if (!mongoUri) {
+    errors.push("MONGODB_URI is required in production");
+  }
+  if (!googleClientId) {
+    errors.push("GOOGLE_CLIENT_ID is required in production");
+  }
+  if (!process.env.ADMIN_PASSWORD || adminPassword === "SkillArionAdmin123" || adminPassword === "change-this-admin-password") {
+    errors.push("ADMIN_PASSWORD must be changed for production");
+  }
+  if (host === "127.0.0.1" || host === "localhost") {
+    errors.push("HOST must be 0.0.0.0 in production");
+  }
+
+  if (errors.length) {
+    throw new Error(`Invalid production configuration:\n- ${errors.join("\n- ")}`);
+  }
+}
+
+function isPlaceholderMongoUri(value) {
+  const uri = String(value || "").toLowerCase();
+  return uri.includes("<password>") || uri.includes("example.mongodb.net");
 }

@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "start": "node server.js",
     "dev": "node server.js",
-    "migrate:mongo": "node migrate-json-to-mongodb.js"
+    "test": "node --test test/api.test.js"
   },
   "dependencies": {
     "mongodb": "^6.17.0"
