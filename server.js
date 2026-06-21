@@ -88,7 +88,11 @@ const server = http.createServer(async (request, response) => {
 
     serveStatic(requestedUrl, response);
   } catch (error) {
-    sendJson(response, 500, { error: "Server error", detail: error.message });
+    if (isDatabaseError(error)) {
+      sendJson(response, 503, { error: "Database temporarily unavailable. Please try again shortly." });
+      return;
+    }
+    sendJson(response, 500, { error: "The server could not complete this request." });
   }
 });
 
@@ -117,16 +121,17 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 async function handleApi(request, response, requestedUrl) {
-  const db = await readDb();
-  if (ensureCandidateInvitationTokens(db)) {
-    await writeDb(db);
-  }
   const method = request.method;
   const pathname = requestedUrl.pathname;
 
   if (method === "GET" && pathname === "/api/health") {
     sendJson(response, 200, { ok: true, app: "SkillArionMeet", mode: storageMode() });
     return;
+  }
+
+  const db = await readDb();
+  if (ensureCandidateInvitationTokens(db)) {
+    await writeDb(db);
   }
 
   if (method === "POST" && pathname === "/api/auth/admin") {
@@ -750,7 +755,10 @@ async function getMongoDb() {
   if (mongoDb) {
     return mongoDb;
   }
-  mongoClient = new MongoClient(mongoUri);
+  mongoClient = new MongoClient(mongoUri, {
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 10000,
+  });
   await mongoClient.connect();
   mongoDb = mongoClient.db(mongoDbName);
   await seedMongoIfEmpty(mongoDb);
@@ -1385,4 +1393,14 @@ function validateRuntimeConfig() {
 function isPlaceholderMongoUri(value) {
   const uri = String(value || "").toLowerCase();
   return uri.includes("<password>") || uri.includes("example.mongodb.net");
+}
+
+function isDatabaseError(error) {
+  const name = String(error?.name || "");
+  const message = String(error?.message || "").toLowerCase();
+  return name.startsWith("Mongo")
+    || message.includes("mongodb")
+    || message.includes("querysrv")
+    || message.includes("server selection")
+    || message.includes("ssl routines");
 }
