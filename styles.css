@@ -441,7 +441,7 @@ button {
   font-weight: 800;
 }
 
-.google-demo-button {
+.google-signin-placeholder {
   width: 100%;
   min-height: 44px;
   border: 1px solid #dadce0;
@@ -455,7 +455,7 @@ button {
   font-weight: 700;
 }
 
-.google-demo-button:disabled {
+.google-signin-placeholder:disabled {
   opacity: 0.72;
   cursor: not-allowed;
 }

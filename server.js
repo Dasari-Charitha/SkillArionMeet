@@ -1194,8 +1194,8 @@ function getWhatsappStatus() {
     templateName: whatsappTemplateName,
     templateLanguage: whatsappTemplateLanguage,
     requirement: configured
-      ? "Immediate campaigns can be sent through WhatsApp Cloud API."
-      : "Add WhatsApp Cloud API credentials in .env to send real messages.",
+      ? "WhatsApp messaging is ready."
+      : "WhatsApp messaging is not available yet.",
   };
 }
 
@@ -1500,6 +1500,9 @@ function validateRuntimeConfig() {
   }
   if (!googleClientId) {
     errors.push("GOOGLE_CLIENT_ID is required in production");
+  }
+  if (!publicBaseUrl || publicBaseUrl.includes("127.0.0.1") || publicBaseUrl.includes("localhost")) {
+    errors.push("PUBLIC_BASE_URL must be the deployed application URL in production");
   }
   if (!process.env.ADMIN_PASSWORD || adminPassword === "SkillArionAdmin123" || adminPassword === "change-this-admin-password") {
     errors.push("ADMIN_PASSWORD must be changed for production");

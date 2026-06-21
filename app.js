@@ -340,7 +340,7 @@ function renderAdminDashboard() {
           <div class="list">
             <div class="card"><strong>Attendance reports</strong><div class="muted">Filter company-wide records from date to date.</div></div>
             <div class="card"><strong>Transcript sections</strong><div class="muted">Separate host/admin and candidate transcript views.</div></div>
-            <div class="card"><strong>WhatsApp campaigns</strong><div class="muted">Send immediate or scheduled candidate updates through the configured API.</div></div>
+            <div class="card"><strong>WhatsApp campaigns</strong><div class="muted">Send immediate or scheduled candidate updates to approved recipients.</div></div>
             <div class="card"><strong>Guest access</strong><div class="muted">Assign temporary guests to a specific meeting.</div></div>
           </div>
         </section>
@@ -1158,7 +1158,7 @@ function renderWhatsApp() {
                 <div class="campaign-message">${campaign.message}</div>
                 ${renderWhatsappDeliveryResults(campaign)}
               </div>
-              <span class="pill ${campaign.status && campaign.status.includes("Sent") ? "ok" : ""}">${campaign.sendMode === "Scheduled" ? "Scheduled" : "Sent"}</span>
+              <span class="pill ${campaign.status && campaign.status.includes("Sent") ? "ok" : ""}">${campaign.status || campaign.sendMode}</span>
             </div>
           `).join("") || `<div class="card">No WhatsApp campaigns saved yet.</div>`}
         </div>
@@ -1515,7 +1515,7 @@ function bindLogin() {
 
     if (!isConfigured) {
       buttonHost.innerHTML = `
-        <button class="google-demo-button" type="button" disabled>
+        <button class="google-signin-placeholder" type="button" disabled>
           <span class="google-g">G</span>
           Continue with Google
         </button>
@@ -1526,7 +1526,7 @@ function bindLogin() {
 
     if (!window.google?.accounts?.id) {
       buttonHost.innerHTML = `
-        <button class="google-demo-button" type="button" disabled>
+        <button class="google-signin-placeholder" type="button" disabled>
           <span class="google-g">G</span>
           Continue with Google
         </button>
@@ -2429,7 +2429,7 @@ async function saveWhatsappCampaign() {
     campaign.deliveryResults = saved.deliveryResults || [];
   } catch (error) {
     state.backendOnline = false;
-    alert(error.message || "The message could not be sent. Please try again.");
+    alert(error.message || "The WhatsApp message could not be sent. Please try again.");
     return;
   }
 
