@@ -39,6 +39,8 @@ const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const whatsappAccessToken = process.env.WHATSAPP_ACCESS_TOKEN || "";
 const whatsappTemplateName = process.env.WHATSAPP_TEMPLATE_NAME || "";
 const whatsappTemplateLanguage = process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en_US";
+const whatsappSchedulerEnabled = process.env.WHATSAPP_SCHEDULER_ENABLED === "true";
+const whatsappSchedulerIntervalMs = Math.max(30000, Number(process.env.WHATSAPP_SCHEDULER_INTERVAL_MS) || 60000);
 const collectionNames = ["meetings", "guests", "candidates", "whatsappCampaigns", "attendance", "transcripts", "chatMessages"];
 let mongoClient = null;
 let mongoDb = null;
@@ -46,6 +48,8 @@ const sessions = new Map();
 const sessionTtlMs = 12 * 60 * 60 * 1000;
 const whatsappTemplateCacheTtlMs = 5 * 60 * 1000;
 let whatsappTemplateCache = null;
+let whatsappSchedulerTimer = null;
+let whatsappSchedulerRunning = false;
 
 if (mongoDnsServers.length) {
   dns.setServers(mongoDnsServers);
@@ -111,10 +115,12 @@ server.on("error", error => {
 server.listen(port, host, () => {
   const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
   console.log(`SkillArionMeet running at http://${displayHost}:${port}`);
+  startWhatsappScheduler();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
+    stopWhatsappScheduler();
     server.close(async () => {
       if (mongoClient) {
         await mongoClient.close().catch(() => {});
@@ -508,15 +514,21 @@ async function handleApi(request, response, requestedUrl) {
     const campaignMessage = meetingLink
       ? `${String(body.message || "").trim()}\n\nJoin meeting: ${meetingLink}`
       : String(body.message || "").trim();
+    const sendMode = body.sendMode === "Scheduled" ? "Scheduled" : "Immediate";
+    const scheduledAt = sendMode === "Scheduled" ? normalizeScheduledAt(body.scheduledAt) : "";
+    if (sendMode === "Scheduled" && !scheduledAt) {
+      sendJson(response, 400, { error: "Select a valid future schedule time." });
+      return;
+    }
     const campaign = {
       id: `WA-${Date.now()}`,
       message: campaignMessage,
       meetingCode: meeting?.code || "",
       meetingLink,
       recipients,
-      sendMode: body.sendMode === "Scheduled" ? "Scheduled" : "Immediate",
-      scheduledAt: body.sendMode === "Scheduled" ? String(body.scheduledAt || "") : "",
-      status: body.sendMode === "Scheduled" ? "Scheduled" : "Sending",
+      sendMode,
+      scheduledAt,
+      status: sendMode === "Scheduled" ? "Scheduled" : "Sending",
       createdAt: body.createdAt || new Date().toLocaleString(),
       deliveryResults: [],
     };
@@ -817,6 +829,66 @@ function createSession(user) {
     expiresAt: Date.now() + sessionTtlMs,
   });
   return token;
+}
+
+function startWhatsappScheduler() {
+  if (!whatsappSchedulerEnabled || whatsappSchedulerTimer) {
+    return;
+  }
+  whatsappSchedulerTimer = setInterval(() => {
+    processScheduledWhatsappCampaigns().catch(() => {});
+  }, whatsappSchedulerIntervalMs);
+  setTimeout(() => {
+    processScheduledWhatsappCampaigns().catch(() => {});
+  }, 5000);
+}
+
+function stopWhatsappScheduler() {
+  if (whatsappSchedulerTimer) {
+    clearInterval(whatsappSchedulerTimer);
+    whatsappSchedulerTimer = null;
+  }
+}
+
+async function processScheduledWhatsappCampaigns() {
+  if (!whatsappSchedulerEnabled || whatsappSchedulerRunning) {
+    return;
+  }
+  whatsappSchedulerRunning = true;
+  try {
+    const db = await readDb();
+    const campaigns = db.whatsappCampaigns || [];
+    const dueCampaigns = campaigns.filter(campaign => isCampaignDue(campaign, new Date()));
+    for (const campaign of dueCampaigns) {
+      campaign.status = "Sending";
+      campaign.processingStartedAt = new Date().toISOString();
+      await writeDb(db);
+      const delivery = await sendWhatsappCampaign(campaign);
+      campaign.status = delivery.status;
+      campaign.deliveryResults = delivery.results;
+      campaign.sentAt = new Date().toISOString();
+      delete campaign.processingStartedAt;
+      await writeDb(db);
+    }
+  } finally {
+    whatsappSchedulerRunning = false;
+  }
+}
+
+function isCampaignDue(campaign, now) {
+  if (campaign.sendMode !== "Scheduled" || campaign.status !== "Scheduled") {
+    return false;
+  }
+  const scheduledAt = new Date(campaign.scheduledAt || "");
+  return !Number.isNaN(scheduledAt.getTime()) && scheduledAt.getTime() <= now.getTime();
+}
+
+function normalizeScheduledAt(value) {
+  const scheduledAt = new Date(String(value || ""));
+  if (Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+    return "";
+  }
+  return scheduledAt.toISOString();
 }
 
 function getSession(request) {

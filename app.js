@@ -2413,7 +2413,7 @@ async function saveWhatsappCampaign() {
     recipients: whatsappDraftRecipients,
     meetingCode,
     sendMode,
-    scheduledAt: scheduleValue ? new Date(scheduleValue).toLocaleString() : "",
+    scheduledAt: scheduleValue ? new Date(scheduleValue).toISOString() : "",
     status: sendMode === "Scheduled" ? "Scheduled" : "Sending",
     createdAt: new Date().toLocaleString(),
   };

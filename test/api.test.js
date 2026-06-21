@@ -141,6 +141,29 @@ test("health, authentication, authorization, and meeting creation", async () => 
   assert.equal(guestJoined.body.attendance.email, "guest@test.local");
   assert.equal(guestJoined.body.meeting.participants, 1);
 
+  const scheduledCampaign = await request("/api/whatsapp-campaigns", {
+    method: "POST",
+    body: JSON.stringify({
+      message: "Scheduled test message",
+      recipients: [{ name: "Test Guest", phone: "919876543210" }],
+      sendMode: "Scheduled",
+      scheduledAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    }),
+  }, token);
+  assert.equal(scheduledCampaign.response.status, 201);
+  assert.equal(scheduledCampaign.body.status, "Scheduled");
+
+  const invalidSchedule = await request("/api/whatsapp-campaigns", {
+    method: "POST",
+    body: JSON.stringify({
+      message: "Bad schedule",
+      recipients: [{ name: "Test Guest", phone: "919876543210" }],
+      sendMode: "Scheduled",
+      scheduledAt: new Date(Date.now() - 1000).toISOString(),
+    }),
+  }, token);
+  assert.equal(invalidSchedule.response.status, 400);
+
   const logout = await request("/api/auth/logout", { method: "POST" }, token);
   assert.equal(logout.response.status, 200);
 
