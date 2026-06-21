@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const dns = require("dns");
+const { buildTemplateComponents, validateTemplateDefinition } = require("./whatsapp-template");
 
 loadEnvFile();
 
@@ -33,6 +34,7 @@ const adminEmail = (process.env.ADMIN_EMAIL || "admin@SkillArionDevelopment.in")
 const adminPassword = process.env.ADMIN_PASSWORD || "SkillArionAdmin123";
 const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
 const whatsappGraphVersion = process.env.WHATSAPP_GRAPH_VERSION || "v25.0";
+const whatsappBusinessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || "";
 const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const whatsappAccessToken = process.env.WHATSAPP_ACCESS_TOKEN || "";
 const whatsappTemplateName = process.env.WHATSAPP_TEMPLATE_NAME || "";
@@ -42,6 +44,8 @@ let mongoClient = null;
 let mongoDb = null;
 const sessions = new Map();
 const sessionTtlMs = 12 * 60 * 60 * 1000;
+const whatsappTemplateCacheTtlMs = 5 * 60 * 1000;
+let whatsappTemplateCache = null;
 
 if (mongoDnsServers.length) {
   dns.setServers(mongoDnsServers);
@@ -1132,9 +1136,24 @@ function maskValue(value) {
 }
 
 async function sendWhatsappCampaign(campaign) {
+  let templateDefinition;
+  try {
+    templateDefinition = await getValidatedWhatsappTemplate();
+  } catch (error) {
+    return {
+      status: "WhatsApp configuration error",
+      results: campaign.recipients.map(recipient => ({
+        name: recipient.name,
+        phone: recipient.phone,
+        status: "Failed",
+        detail: error.message,
+      })),
+    };
+  }
+
   const results = [];
   for (const recipient of campaign.recipients) {
-    const result = await sendWhatsappTemplateMessage(recipient, campaign.message);
+    const result = await sendWhatsappTemplateMessage(recipient, campaign.message, templateDefinition);
     results.push(result);
   }
 
@@ -1148,25 +1167,16 @@ async function sendWhatsappCampaign(campaign) {
   return { status: "WhatsApp API failed", results };
 }
 
-async function sendWhatsappTemplateMessage(recipient, message) {
+async function sendWhatsappTemplateMessage(recipient, message, templateDefinition) {
   const endpoint = `https://graph.facebook.com/${whatsappGraphVersion}/${whatsappPhoneNumberId}/messages`;
   const template = {
     name: whatsappTemplateName,
     language: { code: whatsappTemplateLanguage },
   };
 
-  // Meta's built-in test template has no variables. The production candidate
-  // update template receives the candidate name and the admin's message.
-  if (whatsappTemplateName !== "hello_world") {
-    template.components = [
-      {
-        type: "body",
-        parameters: [
-          { type: "text", text: recipient.name || "Candidate" },
-          { type: "text", text: message },
-        ],
-      },
-    ];
+  const components = buildTemplateComponents(templateDefinition, recipient.name, message);
+  if (components) {
+    template.components = components;
   }
 
   const payload = {
@@ -1208,6 +1218,47 @@ async function sendWhatsappTemplateMessage(recipient, message) {
       detail: error.message,
     };
   }
+}
+
+async function getValidatedWhatsappTemplate() {
+  if (whatsappTemplateName === "hello_world") {
+    return validateTemplateDefinition({
+      name: "hello_world",
+      status: "APPROVED",
+      language: whatsappTemplateLanguage,
+      components: [{ type: "BODY", text: "Hello World" }],
+    }, whatsappTemplateName, whatsappTemplateLanguage);
+  }
+  if (!whatsappBusinessAccountId) {
+    throw new Error("WhatsApp Business Account ID is missing from the server configuration.");
+  }
+  const cacheKey = `${whatsappTemplateName}:${whatsappTemplateLanguage}`;
+  if (whatsappTemplateCache?.key === cacheKey && whatsappTemplateCache.expiresAt > Date.now()) {
+    return whatsappTemplateCache.definition;
+  }
+
+  const query = new URLSearchParams({
+    name: whatsappTemplateName,
+    fields: "name,status,language,components",
+  });
+  const endpoint = `https://graph.facebook.com/${whatsappGraphVersion}/${whatsappBusinessAccountId}/message_templates?${query}`;
+  const response = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${whatsappAccessToken}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Meta could not verify the WhatsApp template.");
+  }
+  const template = (data.data || []).find(item => {
+    return item.name === whatsappTemplateName && item.language === whatsappTemplateLanguage;
+  });
+  const definition = validateTemplateDefinition(template, whatsappTemplateName, whatsappTemplateLanguage);
+  whatsappTemplateCache = {
+    key: cacheKey,
+    definition,
+    expiresAt: Date.now() + whatsappTemplateCacheTtlMs,
+  };
+  return definition;
 }
 
 function normalizePhone(phone) {
